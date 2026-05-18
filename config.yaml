@@ -1,0 +1,107 @@
+selection:
+  # Используется по умолчанию для balance_auto (списания за перелёт).
+  # Для заказов Biflorica применяется portals.biflorica.selection (3..7 дн.).
+  min_age_days: 6
+  max_age_days: 12
+  list_buffer_days: 3
+
+playwright:
+  headless: true
+  slow_mo_ms: 0
+  navigation_timeout_ms: 60000
+
+portals:
+  biflorica:
+    enabled: true
+    login_url: "https://ec.term.biflorica.ru/marketPlaceNew/balance"
+    orders_url: "https://ec.term.biflorica.ru/marketPlaceNew/default/orders"
+    tab: "all"
+    # Возрастное окно дат вылета для скачивания «Отчёт по сделкам».
+    selection:
+      min_age_days: 3
+      max_age_days: 7
+    # Сверено с «пример страницы заказы/Заказы - Biflorica.com.html»
+    selectors:
+      # Реальная форма /marketPlaceNew/balance: email — type=text, id LoginForm_username
+      email: '#LoginForm_username, input[name="LoginForm[username]"], input[type="email"]'
+      password: '#LoginForm_password, input[name="LoginForm[password]"], input[type="password"]'
+      login_submit: '#loginButton, button:has-text("Log in"), button:has-text("Login")'
+      tab_all: '#orderController label:has(#all-requests)'
+      orders_table_ready: "#orderController table.bf-table-with-grey-border"
+      orders_table_row: '#orderController table.bf-table-with-grey-border tbody > tr:not(.bf-header)'
+      header_row: '#orderController table.bf-table-with-grey-border tbody tr.second-header-row.bf-header'
+      checkbox_in_row: "input.order-checkbox"
+      deal_report_button: '#orderController button.bf-btn-copy-ico.group-orders-btn[title="Отчет по сделкам"]'
+      next_page: '#orderController .bf-pagination li.label-next a[aria-label="Next"]'
+      prev_page: '#orderController .bf-pagination li.label-prev a[aria-label="Previous"]'
+
+# Заполнение Auto_new.xls с баланса (лист «АВБ перелеты») — отдельная кнопка в UI.
+balance_auto:
+  enabled: true
+  workbook_path: Auto_new.xls
+  sheet_name: "АВБ перелеты"
+  balance_url: "https://ec.term.biflorica.ru/marketPlaceNew/balance"
+  backup_before_save: true
+  backup_suffix: ".bak"
+  # auto: сохранить VBA-макросы через Excel (xlwings); xlwt пересобирает .xls без макросов.
+  excel_engine: auto
+  selectors:
+    table: "table.bf-table-with-grey-border"
+  clear_ranges:
+    - top_left: "K15"
+      bottom_right: "P19"
+    - top_left: "A28"
+      bottom_right: "F34"
+  ecuador:
+    # Вес K, АВБ L, сумма списания с баланса — в столбец N «Перелет»
+    price_col: "N"
+    # Колонка «Транспорт трак» (M) — данные подгружаются с del-mir.com (отдельная кнопка).
+    transport_col: "M"
+    # Колонка «Транспорт трак» (M) часто с формулой — без жёсткой очистки остаётся старое значение.
+    force_clear_cols: ["M"]
+  colombia:
+    first_data_row_excel: 28
+    last_data_row_excel: 34
+    # Вес A, АВБ B, Транспорт трак C, Стоимость перелета F.
+    weight_col: "A"
+    awb_col: "B"
+    price_col: "F"
+    transport_col: "C"
+    force_clear_cols: ["C"]
+
+# Загрузка «Транспорт трак» с del-mir.com по AWB из Auto_new.xls — отдельная кнопка.
+delmir:
+  enabled: true
+  login_url: "https://www.del-mir.com/login"
+  balance_url: "https://www.del-mir.com/personal/balance"
+  site_origin: "https://www.del-mir.com"
+  lookback_days: 14
+  description_prefix: "IMP"
+  # Селекторы сверены по сохранённой странице «Мой баланс» (Next.js + Ant Design v4).
+  selectors:
+    email: '#edit_car_username, input[type="email"], input[name="username"], input[name="email"], input[name="login"], input[id$="_username"], input[id$="_email"], input[id$="_login"]'
+    password: '#edit_car_password, input[type="password"], input[name="password"], input[id$="_password"]'
+    login_submit: 'button[type="submit"]:has-text("Войти"), button:has-text("Войти"), button[type="submit"]'
+    balance_table: ".ant-table-wrapper, .ant-table, .ant-table-content, table"
+    balance_row: "tr.ant-table-row, .ant-table-tbody > tr, tbody > tr"
+    row_link: 'a[href*="/personal/"]'
+    detail_awb_label: 'p:has-text("№ AWB")'
+    detail_shipping_label: 'p:has-text("Стоимость доставки")'
+
+# Вложения из почты (IMAP) — одна папка data/downloads/mail.
+# Яндекс: https://yandex.ru/support/mail/mail-clients/imap.html
+mail:
+  enabled: true
+  imap_host: imap.yandex.ru
+  imap_port: 993
+  use_ssl: true
+  folder: INBOX
+  lookback_days: 14
+  output_dir: data/downloads/mail
+  only_unread: false
+  mark_as_seen: false
+  skip_if_filename_exists: true
+  allowed_extensions: [".xlsx", ".xls", ".pdf", ".csv", ".zip"]
+  # Фильтры (пустые списки = все письма за период):
+  from_contains: []
+  subject_contains: []

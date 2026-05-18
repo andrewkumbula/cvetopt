@@ -1,0 +1,56 @@
+@echo off
+REM Лаунчер cvetopt для Windows Server.
+REM Двойной клик: поднимает локальный uvicorn, открывает браузер на http://127.0.0.1:8000.
+REM Цикл while — после команды "обновить программу" приложение само рестартует на новой версии.
+setlocal EnableExtensions EnableDelayedExpansion
+
+set "ROOT=%~dp0"
+cd /d "%ROOT%"
+
+title cvetopt — не закрывать это окно, пока работаете в браузере
+
+echo.
+echo ============================================================
+echo   cvetopt: сервер работает в ЭТОМ окне консоли.
+echo   Пока пользуетесь сайтом в браузере — НЕ ЗАКРЫВАЙТЕ окно.
+echo   Если закрыть окно, сервер остановится и сайт перестанет открываться.
+echo   Завершить работу: в этом окне нажмите Ctrl+C, дождитесь остановки.
+echo ============================================================
+echo.
+
+REM Локальный uv (рекомендуется ставить через winget install astral-sh.uv).
+where uv >nul 2>nul
+if errorlevel 1 (
+  echo [cvetopt] uv не найден в PATH. Установите: https://docs.astral.sh/uv/getting-started/installation/
+  pause
+  exit /b 1
+)
+
+REM Открываем браузер один раз через 3 секунды (uvicorn ещё стартует).
+start "" /b cmd /c "timeout /t 3 /nobreak >nul & start "" http://127.0.0.1:8000/"
+
+:loop
+echo.
+echo [cvetopt] %DATE% %TIME% — запускаю uvicorn (Ctrl+C для выхода)
+uv run uvicorn cvetopt.app:app --host 127.0.0.1 --port 8000 --app-dir src
+set "EXIT_CODE=%ERRORLEVEL%"
+
+REM Код выхода 42 — наш «обновись и перезапустись». Любой другой код = ручной Ctrl+C / краш.
+if "%EXIT_CODE%"=="42" (
+  echo [cvetopt] Получен запрос на обновление. Делаю git pull + uv sync…
+  if exist ".git\" (
+    git pull --ff-only
+  ) else (
+    echo [cvetopt] .git не найден. Пропускаю git pull.
+  )
+  uv sync
+  echo [cvetopt] Проверяю Chromium для Playwright…
+  uv run playwright install chromium
+  echo [cvetopt] Перезапуск…
+  goto loop
+)
+
+REM Любой другой код — выходим, не зацикливаемся.
+echo [cvetopt] uvicorn завершился с кодом %EXIT_CODE%. Выход.
+pause
+exit /b %EXIT_CODE%

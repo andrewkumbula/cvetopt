@@ -1,0 +1,24 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+data/sessions/
+data/downloads/
+data/state/
+logs/
+*.xlsx
+*.xls.bak
+Auto_new.xls
+.DS_Store
+dist/
+*.egg-info/
+*.webm
+*.mp4
+
+# Локальные снимки вёрстки порталов (для отладки селекторов) — на сервер не нужны
+пример страницы*/
+Пример страницы*/

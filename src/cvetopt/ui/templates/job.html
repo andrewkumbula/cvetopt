@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Прогон {{ job_id }}</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; line-height: 1.45; }
+    body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+    .status { font-weight: 600; }
+    pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-break: break-word; }
+    ul.files { font-size: 0.9rem; }
+    a { color: #06c; }
+    .run-banner {
+      background: #fff8e6;
+      border: 1px solid #e6c200;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin: 0 0 1rem 0;
+      font-size: 0.95rem;
+      color: #4a3b00;
+      line-height: 1.4;
+    }
+    .run-banner strong { color: #2a2200; }
+  </style>
+</head>
+<body>
+  <div id="run-notice" class="run-banner" role="status" hidden></div>
+  <p><a href="/">← На главную</a></p>
+  <h1>Прогон</h1>
+  <p>ID: <code id="jid">{{ job_id }}</code></p>
+  <p>Статус: <span class="status" id="st">…</span></p>
+  <p id="err" class="status" style="color:#b00"></p>
+  <h2>Лог</h2>
+  <pre id="log"></pre>
+  <h2>Файлы</h2>
+  <ul class="files" id="files"></ul>
+  <script>
+    const id = document.getElementById("jid").textContent;
+    async function tick() {
+      const r = await fetch("/api/job/" + id);
+      const j = await r.json();
+      document.getElementById("st").textContent = j.status;
+      document.getElementById("err").textContent = j.error || "";
+      document.getElementById("log").textContent = (j.logs || []).join("\n");
+      const ul = document.getElementById("files");
+      ul.innerHTML = "";
+      (j.downloaded_paths || []).forEach(p => {
+        const li = document.createElement("li");
+        li.textContent = p;
+        ul.appendChild(li);
+      });
+      const notice = document.getElementById("run-notice");
+      if (j.status === "running" || j.status === "pending") {
+        notice.hidden = false;
+        notice.innerHTML = j.status === "pending"
+          ? "<strong>Ожидание старта.</strong> Не закрывайте эту вкладку браузера."
+          : "<strong>Идёт прогон.</strong> Не закрывайте эту вкладку — идёт работа с сайтами и файлом. Дождитесь статуса <strong>completed</strong> или <strong>failed</strong>.";
+      } else {
+        notice.hidden = true;
+        notice.textContent = "";
+      }
+      if (j.status === "completed" || j.status === "failed") return;
+      setTimeout(tick, 1000);
+    }
+    tick();
+  </script>
+</body>
+</html>

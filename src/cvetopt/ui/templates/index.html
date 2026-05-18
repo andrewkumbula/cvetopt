@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cvetopt — скачивание отчётов</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; line-height: 1.45; }
+    body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+    button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+    button[disabled] { opacity: 0.5; cursor: not-allowed; }
+    .muted { color: #555; font-size: 0.9rem; }
+    .badge {
+      display: inline-block;
+      background: #eef;
+      border: 1px solid #ccd;
+      border-radius: 999px;
+      padding: 0.1rem 0.6rem;
+      font-size: 0.8rem;
+      color: #224;
+    }
+    .badge.busy { background: #fee; border-color: #fbb; color: #911; }
+    pre { background: #f4f4f4; padding: 1rem; overflow: auto; max-height: 24rem; }
+    .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.5rem; }
+    .danger { background: #fff4f4; border-color: #fbb; }
+  </style>
+</head>
+<body>
+  {# Старые процессы uvicorn без context — не падаем #}
+  {% set version = version|default({"commit": "", "date": "", "branch": ""}) %}
+  <h1>cvetopt</h1>
+  <p class="muted">
+    Версия:
+    {% if version.commit %}
+      <code>{{ version.commit }}</code>{% if version.branch %} ({{ version.branch }}){% endif %}{% if version.date %} от {{ version.date }}{% endif %}
+    {% else %}
+      <em>git-репозиторий не инициализирован</em>
+    {% endif %}
+    &nbsp;|&nbsp; <span id="state" class="badge">проверяю состояние…</span>
+  </p>
+
+  <div class="row">
+    <form method="post" action="/run/biflorica" data-job-form>
+      <button type="submit" data-job-btn>Скачать отчёты (Biflorica)</button>
+    </form>
+  </div>
+
+  <div class="row">
+    <form method="post" action="/run/balance-auto" data-job-form>
+      <button type="submit" data-job-btn>Заполнить Auto_new.xls (перелёты Biflorica + Транспорт трак del-mir)</button>
+    </form>
+  </div>
+
+  <div class="row">
+    <form method="post" action="/run/mail-attachments" data-job-form>
+      <button type="submit" data-job-btn>Скачать вложения из почты</button>
+    </form>
+  </div>
+
+  <hr style="margin: 2.5rem 0;" />
+
+  <div class="row">
+    <button id="update-btn" class="danger" type="button">🔄 Обновить программу</button>
+    <span class="muted">git pull + uv sync + перезапуск</span>
+  </div>
+  <p id="update-msg" class="muted"></p>
+
+  <p class="muted" style="margin-top:2rem">
+    Перед запуском: <code>.env</code> с логином, <code>playwright install chromium</code>. Файл <code>Auto_new.xls</code> в корне проекта; перед сохранением создаётся копия <code>Auto_new.xls.bak</code>.
+  </p>
+
+  <script>
+    const stateEl = document.getElementById("state");
+    const updateBtn = document.getElementById("update-btn");
+    const updateMsg = document.getElementById("update-msg");
+    const jobBtns = document.querySelectorAll("[data-job-btn]");
+
+    function setBusy(busy) {
+      jobBtns.forEach(b => { b.disabled = busy; });
+      updateBtn.disabled = busy;
+      if (busy) {
+        stateEl.textContent = "идёт прогон…";
+        stateEl.classList.add("busy");
+      } else {
+        stateEl.textContent = "готово к запуску";
+        stateEl.classList.remove("busy");
+      }
+    }
+
+    async function pollState() {
+      try {
+        const r = await fetch("/api/state", { cache: "no-store" });
+        if (r.ok) {
+          const j = await r.json();
+          setBusy(!!j.active_job);
+        }
+      } catch (_) {
+        stateEl.textContent = "сервер недоступен (возможно, идёт перезапуск)";
+        stateEl.classList.add("busy");
+      }
+      setTimeout(pollState, 2000);
+    }
+    pollState();
+
+    updateBtn.addEventListener("click", async () => {
+      if (!confirm("Обновить программу? Сервер перезапустится. Все открытые прогоны должны быть завершены.")) return;
+      updateBtn.disabled = true;
+      updateMsg.textContent = "Отправляю запрос на обновление…";
+      try {
+        const r = await fetch("/admin/update", { method: "POST" });
+        const j = await r.json();
+        if (r.ok) {
+          updateMsg.textContent = (j.message || "Обновление запущено") + " Ждём перезапуска…";
+          waitForRestart();
+        } else {
+          updateMsg.textContent = "Ошибка: " + (j.error || r.statusText);
+          updateBtn.disabled = false;
+        }
+      } catch (e) {
+        updateMsg.textContent = "Ошибка сети: " + e;
+        updateBtn.disabled = false;
+      }
+    });
+
+    function waitForRestart() {
+      // Сервер сейчас умрёт; будем долбиться в /api/version, пока не получим ответ.
+      let attempts = 0;
+      const probe = async () => {
+        attempts++;
+        try {
+          const r = await fetch("/api/version", { cache: "no-store" });
+          if (r.ok) {
+            const j = await r.json();
+            updateMsg.textContent = "Готово! Новая версия: " + (j.commit || "?") + (j.date ? " от " + j.date : "") + ". Перезагружаю страницу…";
+            setTimeout(() => window.location.reload(), 1200);
+            return;
+          }
+        } catch (_) {}
+        if (attempts > 60) {
+          updateMsg.textContent = "Сервер не поднялся за минуту. Проверьте окно лаунчера.";
+          return;
+        }
+        setTimeout(probe, 1500);
+      };
+      // Дать серверу секунду на грейс-период.
+      setTimeout(probe, 1500);
+    }
+  </script>
+</body>
+</html>
