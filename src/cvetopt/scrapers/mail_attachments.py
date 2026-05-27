@@ -9,13 +9,20 @@ from cvetopt.core.settings import EnvSettings
 from cvetopt.mail.attachments import collect_mail_attachments
 
 
-async def run_mail_attachments_job(job_id: str, env: EnvSettings) -> None:
+async def run_mail_attachments_job(
+    job_id: str,
+    env: EnvSettings,
+    lookback_days_override: int | None = None,
+) -> None:
     yaml_cfg = env.yaml_config()
     cfg = yaml_cfg.mail
 
     if not cfg.enabled:
         await job_log(job_id, "Почта отключена в config.yaml: mail.enabled=false")
         return
+    if lookback_days_override is not None:
+        cfg = cfg.model_copy(update={"lookback_days": lookback_days_override})
+        await job_log(job_id, f"Переопределён период поиска писем: {cfg.lookback_days} дн.")
 
     try:
         paths, log_lines = await asyncio.to_thread(collect_mail_attachments, cfg, env)

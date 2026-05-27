@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -136,15 +136,31 @@ async def run_biflorica(request: Request, background_tasks: BackgroundTasks):
 
 
 @app.post("/run/mail-attachments")
-async def run_mail_attachments(request: Request, background_tasks: BackgroundTasks):
+async def run_mail_attachments(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    lookback_days: int = Form(14),
+):
     busy = _reject_if_busy()
     if busy is not None:
         return busy
+    if lookback_days < 1 or lookback_days > 365:
+        return JSONResponse(
+            {"error": "Период должен быть в диапазоне 1..365 дней."},
+            status_code=422,
+        )
     env = EnvSettings()
-    job = job_manager.create_job("mail_attachments")
+    job = job_manager.create_job(f"mail_attachments:{lookback_days}d")
 
     async def _start() -> None:
-        await run_coro_logged(job.id, run_mail_attachments_job(job.id, env))
+        await run_coro_logged(
+            job.id,
+            run_mail_attachments_job(
+                job.id,
+                env,
+                lookback_days_override=lookback_days,
+            ),
+        )
 
     background_tasks.add_task(_start)
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)

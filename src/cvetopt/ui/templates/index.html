@@ -23,6 +23,11 @@
     pre { background: #f4f4f4; padding: 1rem; overflow: auto; max-height: 24rem; }
     .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.5rem; }
     .danger { background: #fff4f4; border-color: #fbb; }
+    .input-days {
+      width: 5.5rem;
+      padding: 0.45rem 0.5rem;
+      font-size: 0.95rem;
+    }
   </style>
 </head>
 <body>
@@ -53,6 +58,17 @@
 
   <div class="row">
     <form method="post" action="/run/mail-attachments" data-job-form>
+      <label for="lookback_days" class="muted">за дней:</label>
+      <input
+        id="lookback_days"
+        class="input-days"
+        type="number"
+        name="lookback_days"
+        min="1"
+        max="365"
+        step="1"
+        value="14"
+      />
       <button type="submit" data-job-btn>Скачать вложения из почты</button>
     </form>
   </div>
