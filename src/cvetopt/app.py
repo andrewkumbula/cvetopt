@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, Form, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -139,7 +139,7 @@ async def run_biflorica(request: Request, background_tasks: BackgroundTasks):
 async def run_mail_attachments(
     request: Request,
     background_tasks: BackgroundTasks,
-    lookback_days: int = Form(14),
+    lookback_days: int = 14,
 ):
     busy = _reject_if_busy()
     if busy is not None:

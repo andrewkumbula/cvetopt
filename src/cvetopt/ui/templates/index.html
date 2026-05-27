@@ -86,6 +86,8 @@
     const updateBtn = document.getElementById("update-btn");
     const updateMsg = document.getElementById("update-msg");
     const jobBtns = document.querySelectorAll("[data-job-btn]");
+    const mailForm = document.querySelector('form[action="/run/mail-attachments"]');
+    const lookbackInput = document.getElementById("lookback_days");
 
     function setBusy(busy) {
       jobBtns.forEach(b => { b.disabled = busy; });
@@ -156,6 +158,14 @@
       };
       // Дать серверу секунду на грейс-период.
       setTimeout(probe, 1500);
+    }
+
+    if (mailForm && lookbackInput) {
+      mailForm.addEventListener("submit", () => {
+        const days = Number.parseInt(lookbackInput.value, 10);
+        const safeDays = Number.isFinite(days) ? days : 14;
+        mailForm.action = "/run/mail-attachments?lookback_days=" + encodeURIComponent(String(safeDays));
+      });
     }
   </script>
 </body>
