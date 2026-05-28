@@ -19,6 +19,7 @@ from cvetopt.core.settings import (
     BifloricaPortalConfig,
     EnvSettings,
     SelectionConfig,
+    SelectionOverride,
     _resolve_selection,
     merged_playwright,
 )
@@ -27,13 +28,21 @@ from cvetopt.core.settings import (
 LogFn = Callable[[str], Awaitable[None]]
 
 
-def _effective_selection(yaml_cfg: AppYamlConfig) -> SelectionConfig:
+def _effective_selection(
+    yaml_cfg: AppYamlConfig,
+    override: SelectionOverride | None = None,
+) -> SelectionConfig:
     """Окно для джоба заказов: переопределение portals.biflorica.selection, иначе глобальная selection."""
-    return _resolve_selection(yaml_cfg.selection, yaml_cfg.portals.biflorica.selection)
+    base = _resolve_selection(yaml_cfg.selection, yaml_cfg.portals.biflorica.selection)
+    return _resolve_selection(base, override)
 
 
-def _flight_window_for_ui(today: date, yaml_cfg: AppYamlConfig) -> tuple[date, date]:
-    sel = _effective_selection(yaml_cfg)
+def _flight_window_for_ui(
+    today: date,
+    yaml_cfg: AppYamlConfig,
+    override: SelectionOverride | None = None,
+) -> tuple[date, date]:
+    sel = _effective_selection(yaml_cfg, override)
     buf = sel.list_buffer_days
     lo = today - timedelta(days=sel.max_age_days + buf)
     hi = today - timedelta(days=sel.min_age_days - buf)
@@ -140,6 +149,7 @@ async def _collect_orders_one_page(
     portal: BifloricaPortalConfig,
     today: date,
     sel_cfg: AppYamlConfig,
+    selection_override: SelectionOverride | None,
     log: LogFn,
 ) -> list[Order]:
     s = portal.selectors
@@ -175,7 +185,7 @@ async def _collect_orders_one_page(
         if not oid or not fd:
             continue
         age = _age_days(today, fd)
-        eff = _effective_selection(sel_cfg)
+        eff = _effective_selection(sel_cfg, selection_override)
         lo, hi = eff.min_age_days, eff.max_age_days
         if lo <= age <= hi:
             out.append(
@@ -245,6 +255,7 @@ async def _collect_all_orders_paginated(
     portal: BifloricaPortalConfig,
     sel_cfg: AppYamlConfig,
     today: date,
+    selection_override: SelectionOverride | None,
     log: LogFn,
 ) -> list[Order]:
     await _rewind_to_first_page(page, portal, log)
@@ -252,7 +263,9 @@ async def _collect_all_orders_paginated(
     page_no = 0
     while True:
         page_no += 1
-        batch = await _collect_orders_one_page(page, portal, today, sel_cfg, log)
+        batch = await _collect_orders_one_page(
+            page, portal, today, sel_cfg, selection_override, log
+        )
         await log(f"Страница {page_no}: заказов в диапазоне возраста на странице: {len(batch)}")
         for o in batch:
             seen[o.order_id] = o
@@ -350,7 +363,11 @@ async def _download_order_report(
             pass
 
 
-async def run_biflorica_job(job_id: str, env: EnvSettings) -> None:
+async def run_biflorica_job(
+    job_id: str,
+    env: EnvSettings,
+    selection_override: SelectionOverride | None = None,
+) -> None:
     yaml_cfg = env.yaml_config()
     portal = yaml_cfg.portals.biflorica
     if not portal.enabled:
@@ -440,8 +457,8 @@ async def run_biflorica_job(job_id: str, env: EnvSettings) -> None:
 
             await _ensure_tab_all(page, portal, lg)
 
-            lo, hi = _flight_window_for_ui(today, yaml_cfg)
-            eff = _effective_selection(yaml_cfg)
+            lo, hi = _flight_window_for_ui(today, yaml_cfg, selection_override)
+            eff = _effective_selection(yaml_cfg, selection_override)
             await lg(
                 f"Ожидаемые даты вылета в выборке: {lo.isoformat()} … {hi.isoformat()} "
                 f"(возраст {eff.min_age_days}–{eff.max_age_days} дн.)",
@@ -451,7 +468,9 @@ async def run_biflorica_job(job_id: str, env: EnvSettings) -> None:
                 "по дате вылета в этом диапазоне и перезапустите.",
             )
 
-            orders = await _collect_all_orders_paginated(page, portal, yaml_cfg, today, lg)
+            orders = await _collect_all_orders_paginated(
+                page, portal, yaml_cfg, today, selection_override, lg
+            )
             orders.sort(key=lambda o: o.flight_date)
             await lg(f"Всего уникальных заказов в диапазоне возраста: {len(orders)}")
 

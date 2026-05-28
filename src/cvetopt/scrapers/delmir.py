@@ -613,7 +613,11 @@ async def collect_awb_to_cost(
     return result
 
 
-async def run_delmir_transport_job(job_id: str, env: EnvSettings) -> None:
+async def run_delmir_transport_job(
+    job_id: str,
+    env: EnvSettings,
+    lookback_days_override: int | None = None,
+) -> None:
     yaml_cfg = env.yaml_config()
     cfg = yaml_cfg.delmir
     bcfg = yaml_cfg.balance_auto
@@ -621,6 +625,12 @@ async def run_delmir_transport_job(job_id: str, env: EnvSettings) -> None:
     if not cfg.enabled:
         await job_log(job_id, "del-mir отключён в config.yaml: delmir.enabled=false")
         return
+    if lookback_days_override is not None:
+        cfg = cfg.model_copy(update={"lookback_days": lookback_days_override})
+        await job_log(
+            job_id,
+            f"Переопределён период для del-mir: {cfg.lookback_days} дн.",
+        )
 
     async def lg(msg: str) -> None:
         await job_log(job_id, msg)

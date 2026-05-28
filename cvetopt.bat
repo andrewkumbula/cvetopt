@@ -7,7 +7,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
-title cvetopt — не закрывать это окно, пока работаете в браузере
+title cvetopt - do not close this window
 
 echo.
 echo ============================================================
