@@ -9,6 +9,7 @@ __pycache__/
 data/sessions/
 data/downloads/
 data/state/
+data/logs/
 logs/
 *.xlsx
 *.xls.bak
@@ -18,6 +19,7 @@ dist/
 *.egg-info/
 *.webm
 *.mp4
+ТЗ.md
 
 # Локальные снимки вёрстки порталов (для отладки селекторов) — на сервер не нужны
 пример страницы*/
