@@ -12,6 +12,11 @@ from fastapi.templating import Jinja2Templates
 
 from cvetopt.core.job_manager import job_manager, run_coro_logged
 from cvetopt.core.logging_setup import configure_logging
+from cvetopt.core.runtime_settings import (
+    RuntimeSettings,
+    load_runtime_settings,
+    save_runtime_settings,
+)
 from cvetopt.core.settings import EnvSettings, SelectionOverride
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
@@ -57,10 +62,16 @@ def _git_version() -> dict[str, str]:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
+    env = EnvSettings()
+    runtime_settings = load_runtime_settings(env)
     return _TEMPLATES.TemplateResponse(
         request,
         "index.html",
-        {"version": _git_version(), "git_available": (PROJECT_ROOT / ".git").exists()},
+        {
+            "version": _git_version(),
+            "git_available": (PROJECT_ROOT / ".git").exists(),
+            "runtime_settings": runtime_settings.model_dump(),
+        },
     )
 
 
@@ -82,6 +93,40 @@ async def api_state() -> JSONResponse:
     )
 
 
+@app.get("/api/runtime-settings")
+async def api_runtime_settings() -> JSONResponse:
+    env = EnvSettings()
+    return JSONResponse(load_runtime_settings(env).model_dump())
+
+
+@app.post("/api/runtime-settings")
+async def api_runtime_settings_update(request: Request) -> JSONResponse:
+    env = EnvSettings()
+    data = await request.json()
+    current = load_runtime_settings(env).model_dump()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Ожидался JSON-объект."}, status_code=422)
+    merged = {**current, **data}
+    try:
+        settings = RuntimeSettings.model_validate(merged)
+    except Exception as e:
+        return JSONResponse({"error": f"Некорректные значения: {e}"}, status_code=422)
+
+    if settings.biflorica_min_age_days < 0 or settings.biflorica_max_age_days < 0:
+        return JSONResponse({"error": "Biflorica: период не может быть отрицательным."}, status_code=422)
+    if settings.biflorica_min_age_days > settings.biflorica_max_age_days:
+        return JSONResponse({"error": "Biflorica: min не может быть больше max."}, status_code=422)
+    if settings.biflorica_max_age_days > 365:
+        return JSONResponse({"error": "Biflorica: максимум 365 дней."}, status_code=422)
+    if settings.delmir_lookback_days < 1 or settings.delmir_lookback_days > 365:
+        return JSONResponse({"error": "del-mir: диапазон 1..365 дней."}, status_code=422)
+    if settings.mail_lookback_days < 1 or settings.mail_lookback_days > 365:
+        return JSONResponse({"error": "Почта: диапазон 1..365 дней."}, status_code=422)
+
+    save_runtime_settings(env, settings)
+    return JSONResponse({"ok": True, "settings": settings.model_dump()})
+
+
 def _reject_if_busy() -> JSONResponse | None:
     if job_manager.has_active_job():
         return JSONResponse(
@@ -95,7 +140,7 @@ def _reject_if_busy() -> JSONResponse | None:
 async def run_balance_auto(
     request: Request,
     background_tasks: BackgroundTasks,
-    delmir_lookback_days: int = 14,
+    delmir_lookback_days: int | None = None,
 ):
     """
     Объединённый шаг 2+3: сначала balance_auto (Biflorica → перелёты),
@@ -104,13 +149,19 @@ async def run_balance_auto(
     busy = _reject_if_busy()
     if busy is not None:
         return busy
-    if delmir_lookback_days < 1 or delmir_lookback_days > 365:
+    env = EnvSettings()
+    runtime_settings = load_runtime_settings(env)
+    effective_delmir_lookback = (
+        delmir_lookback_days
+        if delmir_lookback_days is not None
+        else runtime_settings.delmir_lookback_days
+    )
+    if effective_delmir_lookback < 1 or effective_delmir_lookback > 365:
         return JSONResponse(
             {"error": "Период del-mir должен быть в диапазоне 1..365 дней."},
             status_code=422,
         )
-    env = EnvSettings()
-    job = job_manager.create_job(f"balance_auto+delmir:{delmir_lookback_days}d")
+    job = job_manager.create_job(f"balance_auto+delmir:{effective_delmir_lookback}d")
 
     async def _chain() -> None:
         from cvetopt.core.job_manager import job_log
@@ -126,14 +177,14 @@ async def run_balance_auto(
             return
         await job_log(
             job.id,
-            f"Шаг 2 завершён успешно. Запускаю Транспорт трак с del-mir.com ({delmir_lookback_days} дн.)…",
+            f"Шаг 2 завершён успешно. Запускаю Транспорт трак с del-mir.com ({effective_delmir_lookback} дн.)…",
         )
         await run_coro_logged(
             job.id,
             run_delmir_transport_job(
                 job.id,
                 env,
-                lookback_days_override=delmir_lookback_days,
+                lookback_days_override=effective_delmir_lookback,
             ),
         )
 
@@ -145,30 +196,40 @@ async def run_balance_auto(
 async def run_biflorica(
     request: Request,
     background_tasks: BackgroundTasks,
-    min_age_days: int = 3,
-    max_age_days: int = 7,
+    min_age_days: int | None = None,
+    max_age_days: int | None = None,
 ):
     busy = _reject_if_busy()
     if busy is not None:
         return busy
-    if min_age_days < 0 or max_age_days < 0:
+    env = EnvSettings()
+    runtime_settings = load_runtime_settings(env)
+    effective_min_age = (
+        min_age_days if min_age_days is not None else runtime_settings.biflorica_min_age_days
+    )
+    effective_max_age = (
+        max_age_days if max_age_days is not None else runtime_settings.biflorica_max_age_days
+    )
+    if effective_min_age < 0 or effective_max_age < 0:
         return JSONResponse(
             {"error": "Период Biflorica не может быть отрицательным."},
             status_code=422,
         )
-    if min_age_days > max_age_days:
+    if effective_min_age > effective_max_age:
         return JSONResponse(
             {"error": "Для Biflorica min_age_days не может быть больше max_age_days."},
             status_code=422,
         )
-    if max_age_days > 365:
+    if effective_max_age > 365:
         return JSONResponse(
             {"error": "Период Biflorica должен быть в диапазоне 0..365 дней."},
             status_code=422,
         )
-    bif_selection = SelectionOverride(min_age_days=min_age_days, max_age_days=max_age_days)
-    env = EnvSettings()
-    job = job_manager.create_job(f"biflorica:{min_age_days}-{max_age_days}d")
+    bif_selection = SelectionOverride(
+        min_age_days=effective_min_age,
+        max_age_days=effective_max_age,
+    )
+    job = job_manager.create_job(f"biflorica:{effective_min_age}-{effective_max_age}d")
 
     async def _start() -> None:
         await run_coro_logged(
@@ -184,18 +245,22 @@ async def run_biflorica(
 async def run_mail_attachments(
     request: Request,
     background_tasks: BackgroundTasks,
-    lookback_days: int = 14,
+    lookback_days: int | None = None,
 ):
     busy = _reject_if_busy()
     if busy is not None:
         return busy
-    if lookback_days < 1 or lookback_days > 365:
+    env = EnvSettings()
+    runtime_settings = load_runtime_settings(env)
+    effective_lookback = (
+        lookback_days if lookback_days is not None else runtime_settings.mail_lookback_days
+    )
+    if effective_lookback < 1 or effective_lookback > 365:
         return JSONResponse(
             {"error": "Период должен быть в диапазоне 1..365 дней."},
             status_code=422,
         )
-    env = EnvSettings()
-    job = job_manager.create_job(f"mail_attachments:{lookback_days}d")
+    job = job_manager.create_job(f"mail_attachments:{effective_lookback}d")
 
     async def _start() -> None:
         await run_coro_logged(
@@ -203,7 +268,7 @@ async def run_mail_attachments(
             run_mail_attachments_job(
                 job.id,
                 env,
-                lookback_days_override=lookback_days,
+                lookback_days_override=effective_lookback,
             ),
         )
 

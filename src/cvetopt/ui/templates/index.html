@@ -80,6 +80,12 @@
     .settings-hint {
       margin-top: 0.7rem;
     }
+    .settings-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-top: 0.9rem;
+    }
     @media (max-width: 780px) {
       .job-form,
       .settings-grid { grid-template-columns: 1fr; }
@@ -92,6 +98,7 @@
 <body>
   {# Старые процессы uvicorn без context — не падаем #}
   {% set version = version|default({"commit": "", "date": "", "branch": ""}) %}
+  {% set runtime_settings = runtime_settings|default({}) %}
   <h1>cvetopt</h1>
   <p class="muted">
     Версия:
@@ -139,7 +146,7 @@
         min="0"
         max="365"
         step="1"
-        value="3"
+        value="{{ runtime_settings.biflorica_min_age_days|default(3) }}"
       />
       <span class="muted-sep">..</span>
       <input
@@ -150,7 +157,7 @@
         min="0"
         max="365"
         step="1"
-        value="7"
+        value="{{ runtime_settings.biflorica_max_age_days|default(7) }}"
       />
       <label for="delmir_lookback_days" class="muted">del-mir, за дней:</label>
       <input
@@ -161,7 +168,7 @@
         min="1"
         max="365"
         step="1"
-        value="14"
+        value="{{ runtime_settings.delmir_lookback_days|default(14) }}"
       />
       <span></span>
       <span></span>
@@ -174,12 +181,16 @@
         min="1"
         max="365"
         step="1"
-        value="14"
+        value="{{ runtime_settings.mail_lookback_days|default(14) }}"
       />
       <span></span>
       <span></span>
     </div>
-    <p class="muted settings-hint">Значения применяются к следующему запуску соответствующей кнопки.</p>
+    <div class="settings-actions">
+      <button id="save-settings-btn" type="button">Сохранить настройки</button>
+      <span id="save-settings-msg" class="muted"></span>
+    </div>
+    <p class="muted settings-hint">Сохранённые значения будут использоваться по умолчанию после перезапуска.</p>
   </section>
 
   <hr style="margin: 2.5rem 0;" />
@@ -201,6 +212,8 @@
     const delmirLookbackInput = document.getElementById("delmir_lookback_days");
     const mailForm = document.getElementById("mail-form");
     const lookbackInput = document.getElementById("lookback_days");
+    const saveSettingsBtn = document.getElementById("save-settings-btn");
+    const saveSettingsMsg = document.getElementById("save-settings-msg");
     const tabBtns = document.querySelectorAll("[data-tab-target]");
     const tabPanels = document.querySelectorAll(".tab-panel");
 
@@ -312,6 +325,36 @@
         const days = Number.parseInt(lookbackInput.value, 10);
         const safeDays = Number.isFinite(days) ? days : 14;
         mailForm.action = "/run/mail-attachments?lookback_days=" + encodeURIComponent(String(safeDays));
+      });
+    }
+
+    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput) {
+      saveSettingsBtn.addEventListener("click", async () => {
+        const payload = {
+          biflorica_min_age_days: Number.parseInt(bifMinInput.value, 10),
+          biflorica_max_age_days: Number.parseInt(bifMaxInput.value, 10),
+          delmir_lookback_days: Number.parseInt(delmirLookbackInput.value, 10),
+          mail_lookback_days: Number.parseInt(lookbackInput.value, 10),
+        };
+        saveSettingsBtn.disabled = true;
+        saveSettingsMsg.textContent = "Сохраняю…";
+        try {
+          const r = await fetch("/api/runtime-settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const j = await r.json();
+          if (!r.ok) {
+            saveSettingsMsg.textContent = "Ошибка: " + (j.error || r.statusText);
+            return;
+          }
+          saveSettingsMsg.textContent = "Сохранено.";
+        } catch (e) {
+          saveSettingsMsg.textContent = "Ошибка сети: " + e;
+        } finally {
+          saveSettingsBtn.disabled = false;
+        }
       });
     }
   </script>
