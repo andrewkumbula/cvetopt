@@ -6,7 +6,7 @@
   <title>cvetopt — скачивание отчётов</title>
   <style>
     :root { font-family: system-ui, sans-serif; line-height: 1.45; }
-    body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+    body { max-width: 56rem; margin: 2rem auto; padding: 0 1rem; }
     button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
     button[disabled] { opacity: 0.5; cursor: not-allowed; }
     .muted { color: #555; font-size: 0.9rem; }
@@ -21,12 +21,71 @@
     }
     .badge.busy { background: #fee; border-color: #fbb; color: #911; }
     pre { background: #f4f4f4; padding: 1rem; overflow: auto; max-height: 24rem; }
-    .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.5rem; }
+    .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.5rem; flex-wrap: wrap; }
     .danger { background: #fff4f4; border-color: #fbb; }
     .input-days {
-      width: 5.5rem;
+      width: 6rem;
       padding: 0.45rem 0.5rem;
       font-size: 0.95rem;
+    }
+    .job-form {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.5rem;
+      align-items: center;
+      width: min(52rem, 100%);
+    }
+    .job-form button {
+      justify-self: start;
+    }
+    .job-form .muted-sep {
+      color: #666;
+    }
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 1.25rem;
+      margin-bottom: 0.75rem;
+    }
+    .tab-btn {
+      border: 1px solid #ccd;
+      background: #f6f7ff;
+      color: #223;
+      border-radius: 8px;
+      padding: 0.35rem 0.8rem;
+      font-size: 0.92rem;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: #e8ebff;
+      border-color: #aab4ff;
+      font-weight: 600;
+    }
+    .tab-panel.hidden {
+      display: none;
+    }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: 14rem auto auto auto;
+      gap: 0.5rem;
+      align-items: center;
+      max-width: 56rem;
+      margin-top: 1rem;
+    }
+    .settings-grid .muted-sep {
+      color: #666;
+      text-align: center;
+      width: 1.2rem;
+    }
+    .settings-hint {
+      margin-top: 0.7rem;
+    }
+    @media (max-width: 780px) {
+      .job-form,
+      .settings-grid { grid-template-columns: 1fr; }
+      .job-form button {
+        justify-self: stretch;
+      }
     }
   </style>
 </head>
@@ -44,21 +103,69 @@
     &nbsp;|&nbsp; <span id="state" class="badge">проверяю состояние…</span>
   </p>
 
-  <div class="row">
-    <form method="post" action="/run/biflorica" data-job-form>
-      <button type="submit" data-job-btn>Скачать отчёты (Biflorica)</button>
-    </form>
+  <div class="tabs" role="tablist" aria-label="Разделы">
+    <button id="tab-run" class="tab-btn active" type="button" data-tab-target="panel-run">Запуск</button>
+    <button id="tab-settings" class="tab-btn" type="button" data-tab-target="panel-settings">Настройки</button>
   </div>
 
-  <div class="row">
-    <form method="post" action="/run/balance-auto" data-job-form>
-      <button type="submit" data-job-btn>Заполнить Auto_new.xls (перелёты Biflorica + Транспорт трак del-mir)</button>
-    </form>
-  </div>
+  <section id="panel-run" class="tab-panel" role="tabpanel" aria-labelledby="tab-run">
+    <div class="row">
+      <form method="post" action="/run/biflorica" data-job-form id="biflorica-form" class="job-form">
+        <button type="submit" data-job-btn>Скачать отчёты (Biflorica)</button>
+      </form>
+    </div>
 
-  <div class="row">
-    <form method="post" action="/run/mail-attachments" data-job-form>
-      <label for="lookback_days" class="muted">за дней:</label>
+    <div class="row">
+      <form method="post" action="/run/balance-auto" data-job-form id="balance-auto-form" class="job-form">
+        <button type="submit" data-job-btn>Заполнить Auto_new.xls (перелёты Biflorica + Транспорт трак del-mir)</button>
+      </form>
+    </div>
+
+    <div class="row">
+      <form method="post" action="/run/mail-attachments" data-job-form id="mail-form" class="job-form">
+        <button type="submit" data-job-btn>Скачать вложения из почты</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="panel-settings" class="tab-panel hidden" role="tabpanel" aria-labelledby="tab-settings">
+    <div class="settings-grid">
+      <label for="bif_min_age_days" class="muted">Biflorica, возраст (дни):</label>
+      <input
+        id="bif_min_age_days"
+        class="input-days"
+        type="number"
+        name="min_age_days"
+        min="0"
+        max="365"
+        step="1"
+        value="3"
+      />
+      <span class="muted-sep">..</span>
+      <input
+        id="bif_max_age_days"
+        class="input-days"
+        type="number"
+        name="max_age_days"
+        min="0"
+        max="365"
+        step="1"
+        value="7"
+      />
+      <label for="delmir_lookback_days" class="muted">del-mir, за дней:</label>
+      <input
+        id="delmir_lookback_days"
+        class="input-days"
+        type="number"
+        name="delmir_lookback_days"
+        min="1"
+        max="365"
+        step="1"
+        value="14"
+      />
+      <span></span>
+      <span></span>
+      <label for="lookback_days" class="muted">Почта, за дней:</label>
       <input
         id="lookback_days"
         class="input-days"
@@ -69,9 +176,11 @@
         step="1"
         value="14"
       />
-      <button type="submit" data-job-btn>Скачать вложения из почты</button>
-    </form>
-  </div>
+      <span></span>
+      <span></span>
+    </div>
+    <p class="muted settings-hint">Значения применяются к следующему запуску соответствующей кнопки.</p>
+  </section>
 
   <hr style="margin: 2.5rem 0;" />
 
@@ -86,8 +195,15 @@
     const updateBtn = document.getElementById("update-btn");
     const updateMsg = document.getElementById("update-msg");
     const jobBtns = document.querySelectorAll("[data-job-btn]");
-    const mailForm = document.querySelector('form[action="/run/mail-attachments"]');
+    const bifForm = document.getElementById("biflorica-form");
+    const bifMinInput = document.getElementById("bif_min_age_days");
+    const bifMaxInput = document.getElementById("bif_max_age_days");
+    const balanceAutoForm = document.getElementById("balance-auto-form");
+    const delmirLookbackInput = document.getElementById("delmir_lookback_days");
+    const mailForm = document.getElementById("mail-form");
     const lookbackInput = document.getElementById("lookback_days");
+    const tabBtns = document.querySelectorAll("[data-tab-target]");
+    const tabPanels = document.querySelectorAll(".tab-panel");
 
     function setBusy(busy) {
       jobBtns.forEach(b => { b.disabled = busy; });
@@ -158,6 +274,38 @@
       };
       // Дать серверу секунду на грейс-период.
       setTimeout(probe, 1500);
+    }
+
+    function activateTab(panelId) {
+      tabPanels.forEach((panel) => {
+        panel.classList.toggle("hidden", panel.id !== panelId);
+      });
+      tabBtns.forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.tabTarget === panelId);
+      });
+    }
+
+    tabBtns.forEach((btn) => {
+      btn.addEventListener("click", () => activateTab(btn.dataset.tabTarget));
+    });
+
+    if (bifForm && bifMinInput && bifMaxInput) {
+      bifForm.addEventListener("submit", () => {
+        const minDays = Number.parseInt(bifMinInput.value, 10);
+        const maxDays = Number.parseInt(bifMaxInput.value, 10);
+        const safeMin = Number.isFinite(minDays) ? minDays : 3;
+        const safeMax = Number.isFinite(maxDays) ? maxDays : 7;
+        bifForm.action = "/run/biflorica?min_age_days=" + encodeURIComponent(String(safeMin))
+          + "&max_age_days=" + encodeURIComponent(String(safeMax));
+      });
+    }
+
+    if (balanceAutoForm && delmirLookbackInput) {
+      balanceAutoForm.addEventListener("submit", () => {
+        const days = Number.parseInt(delmirLookbackInput.value, 10);
+        const safeDays = Number.isFinite(days) ? days : 14;
+        balanceAutoForm.action = "/run/balance-auto?delmir_lookback_days=" + encodeURIComponent(String(safeDays));
+      });
     }
 
     if (mailForm && lookbackInput) {

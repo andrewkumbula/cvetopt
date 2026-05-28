@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cvetopt.core.job_manager import job_manager, run_coro_logged
-from cvetopt.core.settings import EnvSettings
+from cvetopt.core.settings import EnvSettings, SelectionOverride
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
 from cvetopt.scrapers.delmir import run_delmir_transport_job
@@ -90,7 +90,11 @@ def _reject_if_busy() -> JSONResponse | None:
 
 
 @app.post("/run/balance-auto")
-async def run_balance_auto(request: Request, background_tasks: BackgroundTasks):
+async def run_balance_auto(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    delmir_lookback_days: int = 14,
+):
     """
     Объединённый шаг 2+3: сначала balance_auto (Biflorica → перелёты),
     затем delmir_transport (Транспорт трак). del-mir стартует ТОЛЬКО при успехе balance_auto.
@@ -98,8 +102,13 @@ async def run_balance_auto(request: Request, background_tasks: BackgroundTasks):
     busy = _reject_if_busy()
     if busy is not None:
         return busy
+    if delmir_lookback_days < 1 or delmir_lookback_days > 365:
+        return JSONResponse(
+            {"error": "Период del-mir должен быть в диапазоне 1..365 дней."},
+            status_code=422,
+        )
     env = EnvSettings()
-    job = job_manager.create_job("balance_auto+delmir")
+    job = job_manager.create_job(f"balance_auto+delmir:{delmir_lookback_days}d")
 
     async def _chain() -> None:
         from cvetopt.core.job_manager import job_log
@@ -113,23 +122,57 @@ async def run_balance_auto(request: Request, background_tasks: BackgroundTasks):
                 "Шаг 2 (баланс Biflorica) завершился неудачно — Транспорт трак с del-mir пропущен.",
             )
             return
-        await job_log(job.id, "Шаг 2 завершён успешно. Запускаю Транспорт трак с del-mir.com…")
-        await run_coro_logged(job.id, run_delmir_transport_job(job.id, env))
+        await job_log(
+            job.id,
+            f"Шаг 2 завершён успешно. Запускаю Транспорт трак с del-mir.com ({delmir_lookback_days} дн.)…",
+        )
+        await run_coro_logged(
+            job.id,
+            run_delmir_transport_job(
+                job.id,
+                env,
+                lookback_days_override=delmir_lookback_days,
+            ),
+        )
 
     background_tasks.add_task(_chain)
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
 @app.post("/run/biflorica")
-async def run_biflorica(request: Request, background_tasks: BackgroundTasks):
+async def run_biflorica(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    min_age_days: int = 3,
+    max_age_days: int = 7,
+):
     busy = _reject_if_busy()
     if busy is not None:
         return busy
+    if min_age_days < 0 or max_age_days < 0:
+        return JSONResponse(
+            {"error": "Период Biflorica не может быть отрицательным."},
+            status_code=422,
+        )
+    if min_age_days > max_age_days:
+        return JSONResponse(
+            {"error": "Для Biflorica min_age_days не может быть больше max_age_days."},
+            status_code=422,
+        )
+    if max_age_days > 365:
+        return JSONResponse(
+            {"error": "Период Biflorica должен быть в диапазоне 0..365 дней."},
+            status_code=422,
+        )
+    bif_selection = SelectionOverride(min_age_days=min_age_days, max_age_days=max_age_days)
     env = EnvSettings()
-    job = job_manager.create_job("biflorica")
+    job = job_manager.create_job(f"biflorica:{min_age_days}-{max_age_days}d")
 
     async def _start() -> None:
-        await run_coro_logged(job.id, run_biflorica_job(job.id, env))
+        await run_coro_logged(
+            job.id,
+            run_biflorica_job(job.id, env, selection_override=bif_selection),
+        )
 
     background_tasks.add_task(_start)
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
@@ -167,16 +210,28 @@ async def run_mail_attachments(
 
 
 @app.post("/run/delmir-transport")
-async def run_delmir(request: Request, background_tasks: BackgroundTasks):
+async def run_delmir(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    lookback_days: int = 14,
+):
     """Оставлено для отладки — кнопки в UI больше нет, см. /run/balance-auto."""
     busy = _reject_if_busy()
     if busy is not None:
         return busy
+    if lookback_days < 1 or lookback_days > 365:
+        return JSONResponse(
+            {"error": "Период del-mir должен быть в диапазоне 1..365 дней."},
+            status_code=422,
+        )
     env = EnvSettings()
-    job = job_manager.create_job("delmir_transport")
+    job = job_manager.create_job(f"delmir_transport:{lookback_days}d")
 
     async def _start() -> None:
-        await run_coro_logged(job.id, run_delmir_transport_job(job.id, env))
+        await run_coro_logged(
+            job.id,
+            run_delmir_transport_job(job.id, env, lookback_days_override=lookback_days),
+        )
 
     background_tasks.add_task(_start)
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
