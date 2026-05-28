@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cvetopt.core.job_manager import job_manager, run_coro_logged
+from cvetopt.core.logging_setup import configure_logging
 from cvetopt.core.settings import EnvSettings, SelectionOverride
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
@@ -25,6 +26,7 @@ _TEMPLATES = Jinja2Templates(
 )
 
 app = FastAPI(title="cvetopt", version="0.1.0")
+configure_logging(EnvSettings())
 
 
 def _git_version() -> dict[str, str]:
