@@ -18,6 +18,58 @@ def _job_log_timestamp() -> str:
     return now.strftime("%Y-%m-%d %H:%M:%S") + f".{ms:03d}"
 
 
+def _is_ui_log_line(line: str) -> bool:
+    """
+    Фильтр для лога в UI:
+    - в файл/консоль пишем ВСЁ,
+    - в интерфейсе показываем только ключевые события для человека.
+    """
+    text = (line or "").strip()
+    low = text.lower()
+    if not text:
+        return False
+
+    noisy_prefixes = (
+        "клик по селектору:",
+        "селектор ",
+        "таблица движений: вариант",
+        "строка заголовка таблицы",
+        "колонки: операция=",
+        "загружена сохранённая сессия",
+    )
+    if low.startswith(noisy_prefixes):
+        return False
+
+    key_markers = (
+        "открываю ",
+        "выполняю вход",
+        "сессия сохранена",
+        "переопределён период",
+        "ожидаемые даты вылета",
+        "всего уникальных заказов",
+        "подходящих imp-записей",
+        "найдено целевых строк",
+        "записано ",
+        "сохранено:",
+        "файл сохранён:",
+        "готово",
+        "ошибка",
+        "пропуск",
+        "не найден",
+        "не удалось",
+        "нет данных",
+        "перезапуск",
+    )
+    if any(marker in low for marker in key_markers):
+        return True
+
+    # Сохраняем краткие сводки (например "Страница 3: ... 2")
+    if low.startswith("страница ") and "заказов в диапазоне" in low:
+        return True
+
+    return False
+
+
 class JobManager:
     def __init__(self) -> None:
         self._jobs: dict[str, JobState] = {}
@@ -48,7 +100,8 @@ class JobManager:
         async with self._lock:
             job = self._jobs.get(job_id)
             if job:
-                job.logs.append(stamped)
+                if _is_ui_log_line(line):
+                    job.logs.append(stamped)
                 if len(job.logs) > 2000:
                     job.logs = job.logs[-1500:]
 
