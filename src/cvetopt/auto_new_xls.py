@@ -348,7 +348,10 @@ def _apply_transport_writes_xlwings(
 ) -> int:
     import xlwings as xw
 
-    wb = xw.Book(str(path))
+    app = xw.App(visible=False, add_book=False)
+    app.display_alerts = False
+    app.screen_updating = False
+    wb = app.books.open(str(path))
     try:
         sht = wb.sheets[cfg.sheet_name]
         for (r_excel, c_excel), val in writes.items():
@@ -356,7 +359,10 @@ def _apply_transport_writes_xlwings(
         wb.save()
         return len(writes)
     finally:
-        wb.close()
+        try:
+            wb.close()
+        finally:
+            app.quit()
 
 
 def apply_transport_costs(
@@ -458,7 +464,10 @@ def _apply_balance_flights_xlwings(
     ec = [f for f in flights if f.platform == "ecuador"]
     co = [f for f in flights if f.platform == "colombia"]
 
-    wb = xw.Book(str(path))
+    app = xw.App(visible=False, add_book=False)
+    app.display_alerts = False
+    app.screen_updating = False
+    wb = app.books.open(str(path))
     try:
         sht = wb.sheets[cfg.sheet_name]
         cleared = _clear_ranges_xlwings(sht, cfg.clear_ranges)
@@ -476,7 +485,10 @@ def _apply_balance_flights_xlwings(
         wb.save()
         return cleared, we, wc, overflow
     finally:
-        wb.close()
+        try:
+            wb.close()
+        finally:
+            app.quit()
 
 
 def apply_balance_flights(
