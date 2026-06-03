@@ -18,6 +18,7 @@ from cvetopt.core.models import Order
 from cvetopt.core.registry import DownloadRegistry
 from cvetopt.core.runtime_settings import (
     archive_biflorica_download_dir,
+    biflorica_download_filename,
     load_runtime_settings,
     resolve_biflorica_archive_dir,
     resolve_biflorica_download_dir,
@@ -512,12 +513,18 @@ async def run_biflorica_job(
                 if order.order_id in downloaded_ids:
                     await lg(f"Пропуск (уже в реестре): {order.order_id}")
                     continue
-                dest = download_dir / f"{order.order_id}__{order.flight_date.isoformat()}.xlsx"
-                if dest.exists() and dest.stat().st_size > 0:
-                    await lg(f"Файл уже есть, добавляю в реестр: {dest.name}")
+                dest = download_dir / biflorica_download_filename(
+                    order.order_id, order.flight_date
+                )
+                legacy_dest = download_dir / (
+                    f"{order.order_id}__{order.flight_date.isoformat()}.xlsx"
+                )
+                existing = dest if dest.exists() else legacy_dest
+                if existing.exists() and existing.stat().st_size > 0:
+                    await lg(f"Файл уже есть, добавляю в реестр: {existing.name}")
                     registry.add(order.order_id)
                     downloaded_ids.add(order.order_id)
-                    await job_manager.add_downloaded(job_id, str(dest))
+                    await job_manager.add_downloaded(job_id, str(existing))
                     continue
 
                 await lg(f"Скачиваю отчёт: заказ {order.order_id}, вылет {order.flight_date}")

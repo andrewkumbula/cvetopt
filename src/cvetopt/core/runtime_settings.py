@@ -7,7 +7,7 @@ import shutil
 import stat
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -20,6 +20,17 @@ DEFAULT_ECUADOR_TEMPLATE = "Invoice/3/Обработка/Прием товара
 ECUADOR_TEMPLATE_FILENAME = "Прием товара Эквадор-4.xlsm"
 DEFAULT_ECUADOR_OUTPUT_DIR = r"D:\Склад ОБмен\Инвойсы Склад"
 BIFLORICA_ARCHIVE_LEGACY_NAMES = frozenset({"архив", "archive"})
+BIFLORICA_DOWNLOAD_PREFIX = "BiFlorica-"
+# Скрипт: BiFlorica-<order_id>__<YYYY-MM-DD>.xlsx; старые без префикса тоже в архив.
+_BIFLORICA_REPORT_STEM_RE = re.compile(
+    r"^(?:BiFlorica-)?\d+__\d{4}-\d{2}-\d{2}$",
+    re.IGNORECASE,
+)
+
+
+def biflorica_download_filename(order_id: str, flight_date: date) -> str:
+    """Имя xlsx отчёта в папке скачивания (префикс BiFlorica- для отличия от прочих файлов)."""
+    return f"{BIFLORICA_DOWNLOAD_PREFIX}{order_id}__{flight_date.isoformat()}.xlsx"
 
 
 class RuntimeSettings(BaseModel):
@@ -114,6 +125,21 @@ def resolve_biflorica_archive_dir(
         base = download_dir or resolve_biflorica_download_dir(env, "")
         return (base / "архив").resolve()
     return _resolve_dir(env, raw_dir, DEFAULT_BIFLORICA_ARCHIVE_DIR)
+
+
+def _is_biflorica_report_to_archive(entry: Path) -> bool:
+    """Файлы отчётов Biflorica в корне папки (не каталоги Обработка/архив/Задачи)."""
+    if not entry.is_file():
+        return False
+    ext = entry.suffix.lower()
+    if ext not in (".xlsx", ".xls"):
+        return False
+    name_lower = entry.name.lower()
+    if "biflorica-deals" in name_lower or name_lower.startswith("biflorica"):
+        return True
+    if _BIFLORICA_REPORT_STEM_RE.match(entry.stem):
+        return True
+    return False
 
 
 def _is_archive_entry(entry: Path, archive_dir: Path, download_dir: Path) -> bool:
@@ -217,8 +243,9 @@ def archive_biflorica_download_dir(
     archive_dir: Path,
 ) -> tuple[Path | None, list[str], list[str]]:
     """
-    Переносит файлы и подпапки из папки скачивания в
-    <папка архива>/<YYYY-MM-DD_HHMMSS>/.
+    Переносит в <папка архива>/<YYYY-MM-DD_HHMMSS>/ только xlsx/xls отчётов Biflorica
+    из корня папки скачивания (имя начинается с BiFlorica- или старый <order_id>__<дата>.xlsx).
+    Подпапки (Обработка, старые архивы, Задачи) и .xlsm/.lnk не трогает.
     """
     if not download_dir.is_dir():
         return None, [], []
@@ -232,7 +259,7 @@ def archive_biflorica_download_dir(
     for entry in download_dir.iterdir():
         if _is_archive_entry(entry, archive_dir, download_dir):
             continue
-        if entry.is_file() or entry.is_dir():
+        if _is_biflorica_report_to_archive(entry):
             to_move.append(entry)
 
     if not to_move:
@@ -244,8 +271,21 @@ def archive_biflorica_download_dir(
 
     moved: list[str] = []
     warnings: list[str] = []
+    access_hint_shown = False
     for src in sorted(to_move, key=lambda p: p.name.lower()):
         target = _archive_target_path(dest_dir, src, stamp)
+        if not os.access(src, os.R_OK):
+            if not access_hint_shown:
+                import getpass
+
+                warnings.append(
+                    f"Нет прав на чтение файлов в {download_dir} для пользователя "
+                    f"«{getpass.getuser()}» — запустите cvetopt.bat под той же учёткой, "
+                    "что владеет C:\\Invoice, или выдайте права на папку."
+                )
+                access_hint_shown = True
+            warnings.append(f"{src.name}: пропуск (нет чтения)")
+            continue
         try:
             warn = _archive_one_entry(src, target)
             moved.append(src.name)
