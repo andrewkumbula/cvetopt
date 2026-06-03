@@ -216,9 +216,35 @@ def validate_biflorica_archive_dir(
     return None
 
 
-def validate_ecuador_paths(env: EnvSettings, raw_template: str, raw_output: str) -> str | None:
-    from cvetopt.invoice.ecuador_create import resolve_ecuador_output_dir, resolve_ecuador_template
+def _default_ecuador_template(env: EnvSettings) -> Path:
+    candidates = [
+        env.project_root / "Invoice" / "3" / "Обработка" / "Прием товара Эквадор-4.xlsm",
+        Path(r"C:\Invoice\3\Обработка\Прием товара Эквадор-4.xlsm"),
+    ]
+    for path in candidates:
+        if path.is_file() and path.stat().st_size > 1024 and path.read_bytes()[:2] == b"PK":
+            return path.resolve()
+    return candidates[0].resolve()
 
+
+def resolve_ecuador_template(env: EnvSettings, raw: str) -> Path:
+    text = (raw or "").strip()
+    if not text:
+        return _default_ecuador_template(env)
+    return _resolve_dir(env, text, DEFAULT_ECUADOR_TEMPLATE)
+
+
+def resolve_ecuador_output_dir(env: EnvSettings, raw: str) -> Path:
+    text = (raw or "").strip()
+    default = (
+        DEFAULT_ECUADOR_OUTPUT_DIR
+        if sys.platform == "win32"
+        else str(env.project_root / "data" / "output" / "ecuador")
+    )
+    return _resolve_dir(env, text or default, default)
+
+
+def validate_ecuador_paths(env: EnvSettings, raw_template: str, raw_output: str) -> str | None:
     if sys.platform != "win32":
         return None
     try:
