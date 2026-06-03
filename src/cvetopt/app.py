@@ -106,37 +106,37 @@ async def api_runtime_settings() -> JSONResponse:
 @app.post("/api/runtime-settings")
 async def api_runtime_settings_update(request: Request) -> JSONResponse:
     env = EnvSettings()
-    data = await request.json()
-    current = load_runtime_settings(env).model_dump()
-    if not isinstance(data, dict):
-        return JSONResponse({"error": "Ожидался JSON-объект."}, status_code=422)
-    merged = {**current, **data}
     try:
-        settings = RuntimeSettings.model_validate(merged)
-    except Exception as e:
-        return JSONResponse({"error": f"Некорректные значения: {e}"}, status_code=422)
+        data = await request.json()
+        current = load_runtime_settings(env).model_dump()
+        if not isinstance(data, dict):
+            return JSONResponse({"error": "Ожидался JSON-объект."}, status_code=422)
+        merged = {**current, **data}
+        try:
+            settings = RuntimeSettings.model_validate(merged)
+        except Exception as e:
+            return JSONResponse({"error": f"Некорректные значения: {e}"}, status_code=422)
 
-    if settings.biflorica_min_age_days < 0 or settings.biflorica_max_age_days < 0:
-        return JSONResponse({"error": "Biflorica: период не может быть отрицательным."}, status_code=422)
-    if settings.biflorica_min_age_days > settings.biflorica_max_age_days:
-        return JSONResponse({"error": "Biflorica: min не может быть больше max."}, status_code=422)
-    if settings.biflorica_max_age_days > 365:
-        return JSONResponse({"error": "Biflorica: максимум 365 дней."}, status_code=422)
-    if settings.delmir_lookback_days < 1 or settings.delmir_lookback_days > 365:
-        return JSONResponse({"error": "del-mir: диапазон 1..365 дней."}, status_code=422)
-    if settings.mail_lookback_days < 1 or settings.mail_lookback_days > 365:
-        return JSONResponse({"error": "Почта: диапазон 1..365 дней."}, status_code=422)
-    dir_err = validate_biflorica_download_dir(env, settings.biflorica_download_dir)
-    if dir_err:
-        return JSONResponse({"error": dir_err}, status_code=422)
-    arch_err = validate_biflorica_archive_dir(
-        env,
-        settings.biflorica_archive_dir,
-        settings.biflorica_download_dir,
-    )
-    if arch_err:
-        return JSONResponse({"error": arch_err}, status_code=422)
-    if sys.platform == "win32":
+        if settings.biflorica_min_age_days < 0 or settings.biflorica_max_age_days < 0:
+            return JSONResponse({"error": "Biflorica: период не может быть отрицательным."}, status_code=422)
+        if settings.biflorica_min_age_days > settings.biflorica_max_age_days:
+            return JSONResponse({"error": "Biflorica: min не может быть больше max."}, status_code=422)
+        if settings.biflorica_max_age_days > 365:
+            return JSONResponse({"error": "Biflorica: максимум 365 дней."}, status_code=422)
+        if settings.delmir_lookback_days < 1 or settings.delmir_lookback_days > 365:
+            return JSONResponse({"error": "del-mir: диапазон 1..365 дней."}, status_code=422)
+        if settings.mail_lookback_days < 1 or settings.mail_lookback_days > 365:
+            return JSONResponse({"error": "Почта: диапазон 1..365 дней."}, status_code=422)
+        dir_err = validate_biflorica_download_dir(env, settings.biflorica_download_dir)
+        if dir_err:
+            return JSONResponse({"error": dir_err}, status_code=422)
+        arch_err = validate_biflorica_archive_dir(
+            env,
+            settings.biflorica_archive_dir,
+            settings.biflorica_download_dir,
+        )
+        if arch_err:
+            return JSONResponse({"error": arch_err}, status_code=422)
         ecu_err = validate_ecuador_paths(
             env,
             settings.ecuador_template_path,
@@ -145,8 +145,13 @@ async def api_runtime_settings_update(request: Request) -> JSONResponse:
         if ecu_err:
             return JSONResponse({"error": ecu_err}, status_code=422)
 
-    save_runtime_settings(env, settings)
-    return JSONResponse({"ok": True, "settings": settings.model_dump()})
+        save_runtime_settings(env, settings)
+        return JSONResponse({"ok": True, "settings": settings.model_dump()})
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Ошибка сохранения настроек: {e}"},
+            status_code=500,
+        )
 
 
 def _pick_folder_native() -> str | None:

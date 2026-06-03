@@ -437,16 +437,20 @@
     });
 
     if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && bifDownloadDirInput && bifArchiveDirInput && ecuadorTemplateInput && ecuadorOutputInput) {
+      const parseDays = (input, fallback) => {
+        const n = Number.parseInt(input.value, 10);
+        return Number.isFinite(n) ? n : fallback;
+      };
       saveSettingsBtn.addEventListener("click", async () => {
         const payload = {
-          biflorica_min_age_days: Number.parseInt(bifMinInput.value, 10),
-          biflorica_max_age_days: Number.parseInt(bifMaxInput.value, 10),
+          biflorica_min_age_days: parseDays(bifMinInput, 3),
+          biflorica_max_age_days: parseDays(bifMaxInput, 7),
           biflorica_download_dir: bifDownloadDirInput.value.trim(),
           biflorica_archive_dir: bifArchiveDirInput.value.trim(),
           ecuador_template_path: ecuadorTemplateInput.value.trim(),
           ecuador_output_dir: ecuadorOutputInput.value.trim(),
-          delmir_lookback_days: Number.parseInt(delmirLookbackInput.value, 10),
-          mail_lookback_days: Number.parseInt(lookbackInput.value, 10),
+          delmir_lookback_days: parseDays(delmirLookbackInput, 14),
+          mail_lookback_days: parseDays(lookbackInput, 14),
         };
         saveSettingsBtn.disabled = true;
         saveSettingsMsg.textContent = "Сохраняю…";
@@ -456,7 +460,14 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
-          const j = await r.json();
+          const text = await r.text();
+          let j = {};
+          try {
+            j = text ? JSON.parse(text) : {};
+          } catch (_) {
+            saveSettingsMsg.textContent = "Ошибка сервера: " + (text.slice(0, 120) || r.statusText);
+            return;
+          }
           if (!r.ok) {
             saveSettingsMsg.textContent = "Ошибка: " + (j.error || r.statusText);
             return;

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -69,12 +71,27 @@ def save_runtime_settings(env: EnvSettings, settings: RuntimeSettings) -> Runtim
     return settings
 
 
+_WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def is_windows_drive_path(text: str) -> bool:
+    """Пути вида C:\\... или D:/... (в т.ч. когда на Mac они не absolute для Path)."""
+    return bool(_WIN_DRIVE_RE.match((text or "").strip()))
+
+
 def _resolve_dir(env: EnvSettings, raw_dir: str, default: str) -> Path:
     text = (raw_dir or "").strip() or default
+    if is_windows_drive_path(text):
+        return Path(text)
     path = Path(text).expanduser()
     if not path.is_absolute():
         path = env.project_root / path
     return path.resolve()
+
+
+def _skip_local_path_check(raw_dir: str) -> bool:
+    """На Mac/Linux пути диска Windows только сохраняем в JSON, не трогаем диск."""
+    return sys.platform != "win32" and is_windows_drive_path(raw_dir)
 
 
 def resolve_biflorica_download_dir(env: EnvSettings, raw_dir: str) -> Path:
@@ -158,6 +175,8 @@ def validate_biflorica_download_dir(env: EnvSettings, raw_dir: str) -> str | Non
     text = (raw_dir or "").strip()
     if not text:
         return "Укажите папку для скачивания."
+    if _skip_local_path_check(text):
+        return None
     try:
         resolved = resolve_biflorica_download_dir(env, text)
     except (OSError, ValueError) as e:
@@ -179,6 +198,8 @@ def validate_biflorica_archive_dir(
     download = validate_biflorica_download_dir(env, raw_download_dir)
     if download:
         return download
+    if _skip_local_path_check(raw_archive_dir) or _skip_local_path_check(raw_download_dir):
+        return None
     try:
         dl_path = resolve_biflorica_download_dir(env, raw_download_dir)
         arch_path = resolve_biflorica_archive_dir(env, raw_archive_dir, dl_path)
@@ -198,6 +219,8 @@ def validate_biflorica_archive_dir(
 def validate_ecuador_paths(env: EnvSettings, raw_template: str, raw_output: str) -> str | None:
     from cvetopt.invoice.ecuador_create import resolve_ecuador_output_dir, resolve_ecuador_template
 
+    if sys.platform != "win32":
+        return None
     try:
         template = resolve_ecuador_template(env, raw_template)
         output = resolve_ecuador_output_dir(env, raw_output)
@@ -205,8 +228,12 @@ def validate_ecuador_paths(env: EnvSettings, raw_template: str, raw_output: str)
         return f"Эквадор: некорректный путь — {e}"
     if not template.is_file():
         return f"Эквадор: шаблон не найден — {template}"
-    if template.stat().st_size < 1024 or template.read_bytes()[:2] != b"PK":
-        return f"Эквадор: шаблон пустой или повреждён — {template}"
+    try:
+        with template.open("rb") as fh:
+            if template.stat().st_size < 1024 or fh.read(2) != b"PK":
+                return f"Эквадор: шаблон пустой или повреждён — {template}"
+    except OSError as e:
+        return f"Эквадор: не удалось прочитать шаблон — {e}"
     try:
         output.mkdir(parents=True, exist_ok=True)
     except OSError as e:
