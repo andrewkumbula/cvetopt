@@ -22,6 +22,20 @@
       line-height: 1.4;
     }
     .run-banner strong { color: #2a2200; }
+    .actions { margin: 1rem 0; display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+    #cancel-btn {
+      background: #b91c1c;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.55rem 1.1rem;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    #cancel-btn:hover:not(:disabled) { background: #991b1b; }
+    #cancel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #cancel-msg { font-size: 0.9rem; color: #555; }
+    .status-cancelled { color: #b45309; }
   </style>
 </head>
 <body>
@@ -30,6 +44,10 @@
   <h1>Прогон</h1>
   <p>ID: <code id="jid">{{ job_id }}</code></p>
   <p>Статус: <span class="status" id="st">…</span></p>
+  <div class="actions">
+    <button type="button" id="cancel-btn" hidden>Остановить прогон</button>
+    <span id="cancel-msg" class="muted"></span>
+  </div>
   <p id="err" class="status" style="color:#b00"></p>
   <h2>Лог</h2>
   <pre id="log"></pre>
@@ -37,10 +55,50 @@
   <ul class="files" id="files"></ul>
   <script>
     const id = document.getElementById("jid").textContent;
+    const cancelBtn = document.getElementById("cancel-btn");
+    const cancelMsg = document.getElementById("cancel-msg");
+    let cancelInFlight = false;
+
+    const statusLabels = {
+      pending: "ожидание",
+      running: "выполняется",
+      completed: "завершён",
+      failed: "ошибка",
+      cancelled: "остановлен",
+    };
+
+    cancelBtn.addEventListener("click", async () => {
+      if (cancelInFlight) return;
+      if (!confirm("Остановить прогон? Зависший Excel на сервере будет принудительно закрыт.")) return;
+      cancelInFlight = true;
+      cancelBtn.disabled = true;
+      cancelMsg.textContent = "Останавливаем…";
+      try {
+        const r = await fetch("/api/job/" + id + "/cancel", { method: "POST" });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          cancelMsg.textContent = body.error || "Не удалось остановить";
+          cancelBtn.disabled = false;
+        } else {
+          cancelMsg.textContent = "Запрос отправлен";
+        }
+      } catch (e) {
+        cancelMsg.textContent = "Сеть: " + e;
+        cancelBtn.disabled = false;
+      } finally {
+        cancelInFlight = false;
+        tick();
+      }
+    });
+
     async function tick() {
       const r = await fetch("/api/job/" + id);
       const j = await r.json();
-      document.getElementById("st").textContent = j.status;
+      const stEl = document.getElementById("st");
+      const label = statusLabels[j.status] || j.status;
+      stEl.textContent = label + " (" + j.status + ")";
+      stEl.className = "status" + (j.status === "cancelled" ? " status-cancelled" : "");
+
       document.getElementById("err").textContent = j.error || "";
       document.getElementById("log").textContent = (j.logs || []).join("\n");
       const ul = document.getElementById("files");
@@ -51,16 +109,21 @@
         ul.appendChild(li);
       });
       const notice = document.getElementById("run-notice");
-      if (j.status === "running" || j.status === "pending") {
+      const running = j.status === "running" || j.status === "pending";
+      if (running) {
         notice.hidden = false;
         notice.innerHTML = j.status === "pending"
-          ? "<strong>Ожидание старта.</strong> Не закрывайте эту вкладку браузера."
-          : "<strong>Идёт прогон.</strong> Не закрывайте эту вкладку — идёт работа с сайтами и файлом. Дождитесь статуса <strong>completed</strong> или <strong>failed</strong>.";
+          ? "<strong>Ожидание старта.</strong> Можно закрыть вкладку — прогон идёт на сервере. При зависании нажмите «Остановить прогон»."
+          : "<strong>Идёт прогон.</strong> При зависании (например на Excel) нажмите <strong>Остановить прогон</strong> ниже.";
+        cancelBtn.hidden = false;
+        cancelBtn.disabled = cancelInFlight;
       } else {
         notice.hidden = true;
         notice.textContent = "";
+        cancelBtn.hidden = true;
+        cancelMsg.textContent = "";
       }
-      if (j.status === "completed" || j.status === "failed") return;
+      if (j.status === "completed" || j.status === "failed" || j.status === "cancelled") return;
       setTimeout(tick, 1000);
     }
     tick();

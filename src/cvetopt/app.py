@@ -7,11 +7,12 @@ import sys
 from pathlib import Path
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cvetopt.core.job_manager import job_manager, run_coro_logged
+from cvetopt.core.models import JobStatus
 from cvetopt.core.logging_setup import configure_logging
 from cvetopt.core.runtime_settings import (
     RuntimeSettings,
@@ -196,7 +197,6 @@ def _reject_if_busy() -> JSONResponse | None:
 @app.post("/run/balance-auto")
 async def run_balance_auto(
     request: Request,
-    background_tasks: BackgroundTasks,
     delmir_lookback_days: int | None = None,
 ):
     """
@@ -245,14 +245,13 @@ async def run_balance_auto(
             ),
         )
 
-    background_tasks.add_task(_chain)
+    job_manager.schedule(job.id, _chain())
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
 @app.post("/run/biflorica")
 async def run_biflorica(
     request: Request,
-    background_tasks: BackgroundTasks,
     min_age_days: int | None = None,
     max_age_days: int | None = None,
 ):
@@ -288,20 +287,16 @@ async def run_biflorica(
     )
     job = job_manager.create_job(f"biflorica:{effective_min_age}-{effective_max_age}d")
 
-    async def _start() -> None:
-        await run_coro_logged(
-            job.id,
-            run_biflorica_job(job.id, env, selection_override=bif_selection),
-        )
-
-    background_tasks.add_task(_start)
+    job_manager.schedule(
+        job.id,
+        run_biflorica_job(job.id, env, selection_override=bif_selection),
+    )
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
 @app.post("/run/mail-attachments")
 async def run_mail_attachments(
     request: Request,
-    background_tasks: BackgroundTasks,
     lookback_days: int | None = None,
 ):
     busy = _reject_if_busy()
@@ -319,24 +314,20 @@ async def run_mail_attachments(
         )
     job = job_manager.create_job(f"mail_attachments:{effective_lookback}d")
 
-    async def _start() -> None:
-        await run_coro_logged(
+    job_manager.schedule(
+        job.id,
+        run_mail_attachments_job(
             job.id,
-            run_mail_attachments_job(
-                job.id,
-                env,
-                lookback_days_override=effective_lookback,
-            ),
-        )
-
-    background_tasks.add_task(_start)
+            env,
+            lookback_days_override=effective_lookback,
+        ),
+    )
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
 @app.post("/run/delmir-transport")
 async def run_delmir(
     request: Request,
-    background_tasks: BackgroundTasks,
     lookback_days: int = 14,
 ):
     """Оставлено для отладки — кнопки в UI больше нет, см. /run/balance-auto."""
@@ -351,13 +342,10 @@ async def run_delmir(
     env = EnvSettings()
     job = job_manager.create_job(f"delmir_transport:{lookback_days}d")
 
-    async def _start() -> None:
-        await run_coro_logged(
-            job.id,
-            run_delmir_transport_job(job.id, env, lookback_days_override=lookback_days),
-        )
-
-    background_tasks.add_task(_start)
+    job_manager.schedule(
+        job.id,
+        run_delmir_transport_job(job.id, env, lookback_days_override=lookback_days),
+    )
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
@@ -405,8 +393,18 @@ async def job_api(job_id: str) -> JSONResponse:
             "logs": job.logs,
             "downloaded_paths": job.downloaded_paths,
             "error": job.error,
+            "cancellable": job.status in (JobStatus.pending, JobStatus.running),
         }
     )
+
+
+@app.post("/api/job/{job_id}/cancel")
+async def job_cancel(job_id: str) -> JSONResponse:
+    ok, message = await job_manager.cancel_job(job_id)
+    if not ok:
+        status = 404 if message == "Прогон не найден." else 409
+        return JSONResponse({"error": message}, status_code=status)
+    return JSONResponse({"ok": True, "status": JobStatus.cancelled.value})
 
 
 def main() -> None:

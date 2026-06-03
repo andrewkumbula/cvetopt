@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import queue
 import random
 import re
+import subprocess
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
@@ -13,7 +15,7 @@ from dateutil import parser as date_parser
 from loguru import logger
 from playwright.async_api import Browser, Download, Locator, Page, async_playwright
 
-from cvetopt.core.job_manager import job_log, job_manager
+from cvetopt.core.job_manager import job_log, job_manager, raise_if_cancelled
 from cvetopt.core.models import Order
 from cvetopt.core.registry import DownloadRegistry
 from cvetopt.core.runtime_settings import (
@@ -398,6 +400,8 @@ async def run_biflorica_job(
     registry = DownloadRegistry(registry_path)
     downloaded_ids = registry.load()
 
+    await raise_if_cancelled(job_id)
+
     if sys.platform == "win32":
         await job_log(
             job_id,
@@ -519,6 +523,7 @@ async def run_biflorica_job(
             await lg(f"Всего уникальных заказов в диапазоне возраста: {len(orders)}")
 
             for order in orders:
+                await raise_if_cancelled(job_id)
                 if order.order_id in downloaded_ids:
                     await lg(f"Пропуск (уже в реестре): {order.order_id}")
                     continue
@@ -555,27 +560,66 @@ async def run_biflorica_job(
                 if sys.platform != "win32":
                     await lg("Эквадор: пропуск (нужен Windows + Excel)")
                 else:
+                    await raise_if_cancelled(job_id)
                     await lg("Эквадор: запуск обработки (Excel)…")
                     try:
                         from cvetopt.invoice.ecuador_create import (
                             create_ecuador_file_from_biflorica,
                         )
 
-                        ecuador_log_lines: list[str] = []
+                        ecuador_log_q: queue.Queue[str] = queue.Queue()
 
                         def _ecuador_log(msg: str) -> None:
-                            ecuador_log_lines.append(msg)
+                            ecuador_log_q.put(msg)
                             logger.info("[job {}] {}", job_id, msg)
 
-                        out = await asyncio.to_thread(
-                            create_ecuador_file_from_biflorica,
-                            dest,
-                            env,
-                            log=_ecuador_log,
-                        )
-                        for msg in ecuador_log_lines:
-                            await lg(msg)
-                        await lg(f"Эквадор: создан файл → {out}")
+                        async def _drain_ecuador_logs() -> None:
+                            while True:
+                                try:
+                                    while True:
+                                        await lg(ecuador_log_q.get_nowait())
+                                except queue.Empty:
+                                    pass
+                                await asyncio.sleep(0.2)
+
+                        drain_task = asyncio.create_task(_drain_ecuador_logs())
+                        ecuador_timeout_sec = 600
+                        try:
+                            out = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    create_ecuador_file_from_biflorica,
+                                    dest,
+                                    env,
+                                    log=_ecuador_log,
+                                ),
+                                timeout=ecuador_timeout_sec,
+                            )
+                        except TimeoutError:
+                            subprocess.run(
+                                ["taskkill", "/im", "EXCEL.EXE", "/f"],
+                                capture_output=True,
+                                check=False,
+                            )
+                            raise RuntimeError(
+                                f"Эквадор: таймаут {ecuador_timeout_sec} с — Excel, вероятно, "
+                                "ждёт диалог. Зайдите на сервер под BananaMan, один раз откройте "
+                                "Excel и шаблон «Прием товара Эквадор-4.xlsm», закройте все "
+                                "окна; или задайте ECUADOR_EXCEL_VISIBLE=1 в .env и перезапустите "
+                                "cvetopt.bat, чтобы увидеть диалог."
+                            ) from None
+                        finally:
+                            drain_task.cancel()
+                            try:
+                                await drain_task
+                            except asyncio.CancelledError:
+                                pass
+                            try:
+                                while True:
+                                    await lg(ecuador_log_q.get_nowait())
+                            except queue.Empty:
+                                pass
+
+                        await lg(f"Эквадор: готово → {out}")
                         await job_manager.add_downloaded(job_id, str(out))
                     except Exception as e:
                         await lg(f"Эквадор (не создан): {e}")
