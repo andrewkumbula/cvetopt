@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import shutil
+import sys
+import tempfile
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+
+from cvetopt.core.runtime_settings import (
+    resolve_ecuador_output_dir,
+    resolve_ecuador_template,
+)
+from cvetopt.core.settings import EnvSettings
+from cvetopt.invoice.ecuador_transform import EcuadorDealRow, transform_biflorica_deals
+
+LogFn = Callable[[str], None]
+
+_SHEET_DATA = 0
+_SHEET_PATH = 1
+_DATA_FIRST_ROW = 7
+_CLEAR_LAST_ROW = 500
+
+
+def _write_deal_row(sheet: object, row: int, deal: EcuadorDealRow) -> None:
+    sheet.range((row, 4)).value = deal.plantation
+    sheet.range((row, 5)).value = deal.flower_type
+    sheet.range((row, 6)).value = deal.variety
+    sheet.range((row, 15)).value = deal.boxes
+    sheet.range((row, 16)).value = deal.sm
+    sheet.range((row, 17)).value = deal.box_type
+    sheet.range((row, 18)).value = deal.total_stems
+    for col_letter, value in deal.qty_by_length_col.items():
+        if value:
+            sheet.range(f"{col_letter}{row}").value = value
+
+
+def _apply_create_file_ui(workbook: object, output_name: str) -> None:
+    """Аналог cbCreateTimeFile: лист «Форматирование», флаги на Path."""
+    sheet = workbook.sheets[_SHEET_DATA]
+    try:
+        sheet.name = "Форматирование"
+    except Exception:
+        pass
+    for btn_name, visible in (("cbCreateTimeFile", False), ("cbTransaction", True)):
+        try:
+            sheet.api.OLEObjects(btn_name).Object.Visible = visible
+        except Exception:
+            pass
+    try:
+        workbook.sheets[_SHEET_PATH].range("A2").value = "False"
+    except Exception:
+        pass
+    _ = output_name
+
+
+def create_ecuador_file_from_biflorica(
+    biflorica_path: Path,
+    env: EnvSettings,
+    *,
+    template_path: Path | None = None,
+    output_dir: Path | None = None,
+    log: LogFn | None = None,
+) -> Path:
+    """
+    Вариант B: преобразование в Python, запись в шаблон .xlsm, SaveAs как «Создать файл».
+    Только Windows + установленный Excel (xlwings).
+    """
+    if sys.platform != "win32":
+        raise RuntimeError("Создание файла Эквадор доступно только на Windows с Excel.")
+
+    biflorica_path = biflorica_path.resolve()
+    if not biflorica_path.is_file():
+        raise FileNotFoundError(biflorica_path)
+
+    from cvetopt.core.runtime_settings import load_runtime_settings
+
+    runtime = load_runtime_settings(env)
+    template = template_path or resolve_ecuador_template(env, runtime.ecuador_template_path)
+    out_dir = output_dir or resolve_ecuador_output_dir(env, runtime.ecuador_output_dir)
+
+    if not template.is_file() or template.stat().st_size < 1024:
+        raise FileNotFoundError(f"Шаблон обработки не найден: {template}")
+    if template.read_bytes()[:2] != b"PK":
+        raise RuntimeError(f"Шаблон повреждён или не скачан полностью: {template}")
+
+    deals = transform_biflorica_deals(biflorica_path)
+    if not deals:
+        raise ValueError(f"В отчёте нет строк сделок: {biflorica_path.name}")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%d/%m/%y %H.%M")
+    out_name = f"Эквадор {stamp}.xlsm"
+    out_path = out_dir / out_name
+
+    def _lg(msg: str) -> None:
+        if log is not None:
+            log(msg)
+
+    _lg(f"Эквадор: сделок {len(deals)}, шаблон {template.name}")
+
+    import xlwings as xw
+
+    app = xw.App(visible=False, add_book=False)
+    app.display_alerts = False
+    app.screen_updating = False
+
+    tmp_copy: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".xlsm", delete=False) as tmp:
+            tmp_copy = Path(tmp.name)
+        shutil.copy2(template, tmp_copy)
+
+        wb = app.books.open(str(tmp_copy))
+        data_sheet = wb.sheets[_SHEET_DATA]
+        path_sheet = wb.sheets[_SHEET_PATH]
+
+        data_sheet.range(f"D{_DATA_FIRST_ROW}:AB{_CLEAR_LAST_ROW}").clear_contents()
+        for idx, deal in enumerate(deals):
+            _write_deal_row(data_sheet, _DATA_FIRST_ROW + idx, deal)
+
+        path_sheet.range("A1").value = str(biflorica_path)
+        path_sheet.range("B1").value = biflorica_path.name
+
+        wb.api.SaveAs(str(out_path.resolve()))
+        _apply_create_file_ui(wb, out_name)
+        wb.save()
+        wb.close()
+        _lg(f"Эквадор: файл создан → {out_path}")
+        return out_path
+    finally:
+        if tmp_copy is not None:
+            tmp_copy.unlink(missing_ok=True)
+        app.quit()
