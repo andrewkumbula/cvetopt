@@ -25,6 +25,16 @@ _CLEAR_LAST_ROW = 500
 _MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
 
 
+def ecuador_output_basename(when: datetime | None = None) -> str:
+    """
+    Имя файла как в кнопке «Создать файл», но без «/» в дате —
+    иначе Windows создаёт подпапки (Эквадор 03\\06\\…).
+    """
+    t = when or datetime.now()
+    stamp = t.strftime("%d.%m.%y %H.%M")
+    return f"Эквадор {stamp}.xlsm"
+
+
 def _configure_excel_app(app: object) -> None:
     app.display_alerts = False
     app.screen_updating = False
@@ -110,9 +120,8 @@ def create_ecuador_file_from_biflorica(
         raise ValueError(f"В отчёте нет строк сделок: {biflorica_path.name}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%d/%m/%y %H.%M")
-    out_name = f"Эквадор {stamp}.xlsm"
-    out_path = out_dir / out_name
+    out_name = ecuador_output_basename()
+    out_path = (out_dir / out_name).resolve()
 
     _lg(f"Эквадор: сделок {len(deals)}, шаблон {template.name}")
 
@@ -159,7 +168,7 @@ def create_ecuador_file_from_biflorica(
 
         _lg(f"Эквадор: сохраняю → {out_path}")
         _apply_create_file_ui(wb, out_name)
-        wb.api.SaveAs(str(out_path.resolve()))
+        wb.api.SaveAs(str(out_path))
         wb.save()
         wb.close()
         wb = None
