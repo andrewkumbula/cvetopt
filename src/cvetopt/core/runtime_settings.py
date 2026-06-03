@@ -14,6 +14,7 @@ from cvetopt.core.settings import EnvSettings, _resolve_selection
 DEFAULT_BIFLORICA_DOWNLOAD_DIR = "data/downloads/biflorica"
 DEFAULT_BIFLORICA_ARCHIVE_DIR = "data/downloads/biflorica/архив"
 DEFAULT_ECUADOR_TEMPLATE = "Invoice/3/Обработка/Прием товара Эквадор-4.xlsm"
+ECUADOR_TEMPLATE_FILENAME = "Прием товара Эквадор-4.xlsm"
 DEFAULT_ECUADOR_OUTPUT_DIR = r"D:\Склад ОБмен\Инвойсы Склад"
 BIFLORICA_ARCHIVE_LEGACY_NAMES = frozenset({"архив", "archive"})
 
@@ -231,7 +232,14 @@ def resolve_ecuador_template(env: EnvSettings, raw: str) -> Path:
     text = (raw or "").strip()
     if not text:
         return _default_ecuador_template(env)
-    return _resolve_dir(env, text, DEFAULT_ECUADOR_TEMPLATE)
+    path = _resolve_dir(env, text, DEFAULT_ECUADOR_TEMPLATE)
+    if path.is_dir():
+        path = path / ECUADOR_TEMPLATE_FILENAME
+    elif not path.is_file() and path.suffix.lower() not in (".xlsm", ".xls"):
+        maybe = path / ECUADOR_TEMPLATE_FILENAME
+        if maybe.is_file():
+            path = maybe
+    return path
 
 
 def resolve_ecuador_output_dir(env: EnvSettings, raw: str) -> Path:
@@ -253,7 +261,11 @@ def validate_ecuador_paths(env: EnvSettings, raw_template: str, raw_output: str)
     except (OSError, ValueError) as e:
         return f"Эквадор: некорректный путь — {e}"
     if not template.is_file():
-        return f"Эквадор: шаблон не найден — {template}"
+        return (
+            f"Эквадор: файл шаблона не найден — {template}. "
+            f"Укажите полный путь к {ECUADOR_TEMPLATE_FILENAME} "
+            f"(например C:\\Invoice\\3\\Обработка\\{ECUADOR_TEMPLATE_FILENAME})."
+        )
     try:
         with template.open("rb") as fh:
             if template.stat().st_size < 1024 or fh.read(2) != b"PK":
