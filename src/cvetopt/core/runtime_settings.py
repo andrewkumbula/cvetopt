@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import stat
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -128,16 +131,97 @@ def _is_archive_entry(entry: Path, archive_dir: Path, download_dir: Path) -> boo
     return False
 
 
+def _archive_target_path(dest_dir: Path, src: Path, stamp: str) -> Path:
+    target = dest_dir / src.name
+    if target.exists():
+        suffix = src.suffix if src.is_file() else ""
+        stem = src.stem if src.is_file() else src.name
+        target = dest_dir / f"{stem}_{stamp}{suffix}"
+    return target
+
+
+def _is_access_denied(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    return getattr(exc, "winerror", None) == 5
+
+
+def _clear_readonly_windows(path: Path) -> None:
+    if sys.platform != "win32":
+        return
+    if path.is_file():
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        return
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            os.chmod(os.path.join(root, name), stat.S_IWRITE | stat.S_IREAD)
+
+
+def _copy_with_retries(src: Path, target: Path, attempts: int = 4) -> None:
+    last_err: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            shutil.copy2(src, target)
+            return
+        except OSError as e:
+            last_err = e
+            if attempt + 1 < attempts:
+                time.sleep(0.35)
+    if last_err is not None:
+        raise last_err
+
+
+def _archive_one_entry(src: Path, target: Path) -> str | None:
+    """
+    Переносит элемент в архив. На Windows — копирование + удаление (надёжнее move).
+    При WinError 5 оставляет копию в архиве и пишет предупреждение.
+    """
+    _clear_readonly_windows(src)
+
+    if src.is_dir():
+        shutil.copytree(src, target, dirs_exist_ok=True)
+        shutil.rmtree(src, ignore_errors=True)
+        if src.exists():
+            return f"{src.name}: папка скопирована в архив, исходник частично остался"
+        return None
+
+    if sys.platform == "win32":
+        _copy_with_retries(src, target)
+        try:
+            src.unlink()
+            return None
+        except OSError as e:
+            if _is_access_denied(e):
+                return (
+                    f"{src.name}: копия в архиве есть ({target}), исходник не удалён — "
+                    "файл занят другим процессом или нет прав на удаление"
+                )
+            raise
+
+    try:
+        shutil.move(str(src), str(target))
+        return None
+    except OSError as e:
+        if not _is_access_denied(e):
+            raise
+    _copy_with_retries(src, target)
+    try:
+        src.unlink()
+        return f"{src.name}: скопирован в архив (переместить не удалось)"
+    except OSError:
+        return f"{src.name}: копия в архиве есть, исходник не удалён"
+
+
 def archive_biflorica_download_dir(
     download_dir: Path,
     archive_dir: Path,
-) -> tuple[Path | None, list[str]]:
+) -> tuple[Path | None, list[str], list[str]]:
     """
     Переносит файлы и подпапки из папки скачивания в
     <папка архива>/<YYYY-MM-DD_HHMMSS>/.
     """
     if not download_dir.is_dir():
-        return None, []
+        return None, [], []
 
     archive_dir = archive_dir.resolve()
     download_dir = download_dir.resolve()
@@ -152,23 +236,25 @@ def archive_biflorica_download_dir(
             to_move.append(entry)
 
     if not to_move:
-        return None, []
+        return None, [], []
 
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     dest_dir = archive_dir / stamp
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     moved: list[str] = []
+    warnings: list[str] = []
     for src in sorted(to_move, key=lambda p: p.name.lower()):
-        target = dest_dir / src.name
-        if target.exists():
-            suffix = src.suffix if src.is_file() else ""
-            stem = src.stem if src.is_file() else src.name
-            target = dest_dir / f"{stem}_{stamp}{suffix}"
-        shutil.move(str(src), str(target))
-        moved.append(src.name)
+        target = _archive_target_path(dest_dir, src, stamp)
+        try:
+            warn = _archive_one_entry(src, target)
+            moved.append(src.name)
+            if warn:
+                warnings.append(warn)
+        except OSError as e:
+            warnings.append(f"{src.name}: не удалось архивировать — {e}")
 
-    return dest_dir, moved
+    return dest_dir, moved, warnings
 
 
 def validate_biflorica_download_dir(env: EnvSettings, raw_dir: str) -> str | None:

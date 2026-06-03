@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import random
 import re
 import sys
@@ -393,14 +394,25 @@ async def run_biflorica_job(
     )
     archive_base.mkdir(parents=True, exist_ok=True)
 
-    archive_dir, archived_names = archive_biflorica_download_dir(
-        download_dir, archive_base
-    )
-    if archive_dir is not None:
+    if sys.platform == "win32":
         await job_log(
             job_id,
-            f"В архив перенесено: {len(archived_names)} → {archive_dir}",
+            f"Архив: Windows-пользователь процесса «{getpass.getuser()}» "
+            f"(запускайте cvetopt.bat под тем же пользователем, что работает с C:\\Invoice)",
         )
+    try:
+        archive_dir, archived_names, archive_warnings = archive_biflorica_download_dir(
+            download_dir, archive_base
+        )
+        if archive_dir is not None:
+            await job_log(
+                job_id,
+                f"В архив перенесено: {len(archived_names)} → {archive_dir}",
+            )
+            for warn in archive_warnings:
+                await job_log(job_id, f"Архив: {warn}")
+    except Exception as e:
+        await job_log(job_id, f"Архивирование пропущено: {e}")
 
     registry = DownloadRegistry(registry_path)
     downloaded_ids = registry.load()
