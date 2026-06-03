@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -16,6 +17,9 @@ from cvetopt.core.runtime_settings import (
     RuntimeSettings,
     load_runtime_settings,
     save_runtime_settings,
+    validate_biflorica_archive_dir,
+    validate_biflorica_download_dir,
+    validate_ecuador_paths,
 )
 from cvetopt.core.settings import EnvSettings, SelectionOverride
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
@@ -122,9 +126,57 @@ async def api_runtime_settings_update(request: Request) -> JSONResponse:
         return JSONResponse({"error": "del-mir: диапазон 1..365 дней."}, status_code=422)
     if settings.mail_lookback_days < 1 or settings.mail_lookback_days > 365:
         return JSONResponse({"error": "Почта: диапазон 1..365 дней."}, status_code=422)
+    dir_err = validate_biflorica_download_dir(env, settings.biflorica_download_dir)
+    if dir_err:
+        return JSONResponse({"error": dir_err}, status_code=422)
+    arch_err = validate_biflorica_archive_dir(
+        env,
+        settings.biflorica_archive_dir,
+        settings.biflorica_download_dir,
+    )
+    if arch_err:
+        return JSONResponse({"error": arch_err}, status_code=422)
+    if sys.platform == "win32":
+        ecu_err = validate_ecuador_paths(
+            env,
+            settings.ecuador_template_path,
+            settings.ecuador_output_dir,
+        )
+        if ecu_err:
+            return JSONResponse({"error": ecu_err}, status_code=422)
 
     save_runtime_settings(env, settings)
     return JSONResponse({"ok": True, "settings": settings.model_dump()})
+
+
+def _pick_folder_native() -> str | None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError:
+        return None
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.attributes("-topmost", True)
+    except tk.TclError:
+        pass
+    try:
+        return filedialog.askdirectory() or None
+    finally:
+        root.destroy()
+
+
+@app.post("/api/pick-folder")
+async def api_pick_folder() -> JSONResponse:
+    """Системный диалог выбора папки (tkinter), только для локального UI."""
+    path = await asyncio.to_thread(_pick_folder_native)
+    if path is None:
+        return JSONResponse(
+            {"error": "Диалог недоступен или папка не выбрана. Введите путь вручную."},
+            status_code=503,
+        )
+    return JSONResponse({"path": path})
 
 
 def _reject_if_busy() -> JSONResponse | None:

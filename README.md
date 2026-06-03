@@ -41,9 +41,11 @@ cd src && uvicorn cvetopt.app:app --host 127.0.0.1 --port 8000
 
 | Путь | Назначение |
 |------|------------|
+| `Invoice/` | **Рабочая папка на сервере** — сюда складывают и обрабатывают xlsx/отчёты; в git не попадает (см. `.gitignore`). На сервере в **Настройки** укажите подпапки `Invoice/…` для скачивания Biflorica и архива. |
 | `data/sessions/biflorica.json` | Сессия браузера после входа |
+| `data/state/runtime_settings.json` | Сохранённые пути папок и периоды из UI |
 | `data/state/biflorica_downloaded.json` | Реестр `order_id`, по которым отчёт уже скачан |
-| `data/downloads/biflorica/<дата>/` | Скачанные xlsx |
+| `data/downloads/biflorica/` | Скачанные xlsx по умолчанию (папки скачивания и **архив** настраиваются в UI) |
 
 ## Если что-то не кликается
 

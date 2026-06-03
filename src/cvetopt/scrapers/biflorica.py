@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+import sys
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from pathlib import Path
@@ -14,6 +15,12 @@ from playwright.async_api import Browser, Download, Locator, Page, async_playwri
 from cvetopt.core.job_manager import job_log, job_manager
 from cvetopt.core.models import Order
 from cvetopt.core.registry import DownloadRegistry
+from cvetopt.core.runtime_settings import (
+    archive_biflorica_download_dir,
+    load_runtime_settings,
+    resolve_biflorica_archive_dir,
+    resolve_biflorica_download_dir,
+)
 from cvetopt.core.settings import (
     AppYamlConfig,
     BifloricaPortalConfig,
@@ -378,11 +385,26 @@ async def run_biflorica_job(
     session_path = root / "data" / "sessions" / "biflorica.json"
     registry_path = root / "data" / "state" / "biflorica_downloaded.json"
     today = date.today()
-    day_dir = root / "data" / "downloads" / "biflorica" / today.isoformat()
-    day_dir.mkdir(parents=True, exist_ok=True)
+    runtime = load_runtime_settings(env)
+    download_dir = resolve_biflorica_download_dir(env, runtime.biflorica_download_dir)
+    download_dir.mkdir(parents=True, exist_ok=True)
+    archive_base = resolve_biflorica_archive_dir(
+        env, runtime.biflorica_archive_dir, download_dir
+    )
+    archive_base.mkdir(parents=True, exist_ok=True)
+
+    archive_dir, archived_names = archive_biflorica_download_dir(
+        download_dir, archive_base
+    )
+    if archive_dir is not None:
+        await job_log(
+            job_id,
+            f"В архив перенесено: {len(archived_names)} → {archive_dir}",
+        )
 
     registry = DownloadRegistry(registry_path)
     downloaded_ids = registry.load()
+    await job_log(job_id, f"Папка скачивания: {download_dir}")
     await job_log(job_id, f"Уже в реестре заказов: {len(downloaded_ids)}")
 
     pw_cfg = merged_playwright(env, yaml_cfg)
@@ -478,7 +500,7 @@ async def run_biflorica_job(
                 if order.order_id in downloaded_ids:
                     await lg(f"Пропуск (уже в реестре): {order.order_id}")
                     continue
-                dest = day_dir / f"{order.order_id}__{order.flight_date.isoformat()}.xlsx"
+                dest = download_dir / f"{order.order_id}__{order.flight_date.isoformat()}.xlsx"
                 if dest.exists() and dest.stat().st_size > 0:
                     await lg(f"Файл уже есть, добавляю в реестр: {dest.name}")
                     registry.add(order.order_id)
@@ -502,6 +524,24 @@ async def run_biflorica_job(
                 downloaded_ids.add(order.order_id)
                 await job_manager.add_downloaded(job_id, str(dest))
                 await lg(f"Сохранено: {dest}")
+                if sys.platform == "win32":
+                    try:
+                        from cvetopt.invoice.ecuador_create import (
+                            create_ecuador_file_from_biflorica,
+                        )
+
+                        out = await asyncio.to_thread(
+                            create_ecuador_file_from_biflorica,
+                            dest,
+                            env,
+                        )
+                        await job_log(job_id, f"Эквадор: создан файл → {out}")
+                        await job_manager.add_downloaded(job_id, str(out))
+                    except Exception as e:
+                        await lg(f"Эквадор (не создан): {e}")
+                        logger.exception("ecuador create failed")
+                else:
+                    await lg("Эквадор: пропуск (нужен Windows + Excel)")
                 await asyncio.sleep(random.uniform(1.0, 3.0))
 
             await lg("Готово.")

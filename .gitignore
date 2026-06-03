@@ -6,6 +6,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+# Рабочая папка на сервере (отчёты, xlsx, промежуточные файлы) — только локально
+Invoice/
+
 data/sessions/
 data/downloads/
 data/state/

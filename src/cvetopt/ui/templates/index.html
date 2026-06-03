@@ -28,6 +28,23 @@
       padding: 0.45rem 0.5rem;
       font-size: 0.95rem;
     }
+    .input-path {
+      width: 100%;
+      min-width: 12rem;
+      padding: 0.45rem 0.5rem;
+      font-size: 0.95rem;
+      font-family: ui-monospace, monospace;
+    }
+    .path-row {
+      grid-column: 2 / -1;
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .path-row .input-path {
+      flex: 1 1 16rem;
+    }
     .job-form {
       display: grid;
       grid-template-columns: 1fr;
@@ -172,6 +189,58 @@
       />
       <span></span>
       <span></span>
+      <label for="bif_download_dir" class="muted">Biflorica, папка на ПК:</label>
+      <div class="path-row">
+        <input
+          id="bif_download_dir"
+          class="input-path"
+          type="text"
+          name="biflorica_download_dir"
+          placeholder="data/downloads/biflorica или полный путь"
+          value="{{ runtime_settings.biflorica_download_dir|default('data/downloads/biflorica') }}"
+          spellcheck="false"
+        />
+        <button id="pick-bif-dir-btn" type="button" data-pick-target="bif_download_dir">Выбрать…</button>
+      </div>
+      <label for="bif_archive_dir" class="muted">Biflorica, папка архива:</label>
+      <div class="path-row">
+        <input
+          id="bif_archive_dir"
+          class="input-path"
+          type="text"
+          name="biflorica_archive_dir"
+          placeholder="data/downloads/biflorica/архив или полный путь"
+          value="{{ runtime_settings.biflorica_archive_dir|default('data/downloads/biflorica/архив') }}"
+          spellcheck="false"
+        />
+        <button id="pick-bif-archive-btn" type="button" data-pick-target="bif_archive_dir">Выбрать…</button>
+      </div>
+      <label for="ecuador_template" class="muted">Эквадор, шаблон .xlsm:</label>
+      <div class="path-row">
+        <input
+          id="ecuador_template"
+          class="input-path"
+          type="text"
+          name="ecuador_template_path"
+          placeholder="C:\Invoice\3\Обработка\Прием товара Эквадор-4.xlsm"
+          value="{{ runtime_settings.ecuador_template_path|default('Invoice/3/Обработка/Прием товара Эквадор-4.xlsm') }}"
+          spellcheck="false"
+        />
+        <button type="button" data-pick-target="ecuador_template">Выбрать…</button>
+      </div>
+      <label for="ecuador_output" class="muted">Эквадор, папка «Создать файл»:</label>
+      <div class="path-row">
+        <input
+          id="ecuador_output"
+          class="input-path"
+          type="text"
+          name="ecuador_output_dir"
+          placeholder="D:\Склад ОБмен\Инвойсы Склад"
+          value="{{ runtime_settings.ecuador_output_dir|default('D:\\Склад ОБмен\\Инвойсы Склад') }}"
+          spellcheck="false"
+        />
+        <button type="button" data-pick-target="ecuador_output">Выбрать…</button>
+      </div>
       <label for="lookback_days" class="muted">Почта, за дней:</label>
       <input
         id="lookback_days"
@@ -190,7 +259,13 @@
       <button id="save-settings-btn" type="button">Сохранить настройки</button>
       <span id="save-settings-msg" class="muted"></span>
     </div>
-    <p class="muted settings-hint">Сохранённые значения будут использоваться по умолчанию после перезапуска.</p>
+    <p class="muted settings-hint">
+      Сохранённые значения будут использоваться по умолчанию после перезапуска.
+      Отчёты Biflorica сохраняются прямо в папку скачивания. Перед новым прогоном
+      её содержимое переносится в папку архива, в подпапку <code>дата-время/</code>.
+      На Windows после каждого скачанного отчёта создаётся файл
+      <code>Эквадор дата.xlsm</code> в папке выгрузки (только сервер с Excel).
+    </p>
   </section>
 
   <hr style="margin: 2.5rem 0;" />
@@ -212,6 +287,11 @@
     const delmirLookbackInput = document.getElementById("delmir_lookback_days");
     const mailForm = document.getElementById("mail-form");
     const lookbackInput = document.getElementById("lookback_days");
+    const bifDownloadDirInput = document.getElementById("bif_download_dir");
+    const bifArchiveDirInput = document.getElementById("bif_archive_dir");
+    const ecuadorTemplateInput = document.getElementById("ecuador_template");
+    const ecuadorOutputInput = document.getElementById("ecuador_output");
+    const pickFolderBtns = document.querySelectorAll("[data-pick-target]");
     const saveSettingsBtn = document.getElementById("save-settings-btn");
     const saveSettingsMsg = document.getElementById("save-settings-msg");
     const tabBtns = document.querySelectorAll("[data-tab-target]");
@@ -328,11 +408,43 @@
       });
     }
 
-    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput) {
+    pickFolderBtns.forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const targetId = btn.dataset.pickTarget;
+        const targetInput = targetId ? document.getElementById(targetId) : null;
+        if (!targetInput) return;
+        btn.disabled = true;
+        const prev = saveSettingsMsg ? saveSettingsMsg.textContent : "";
+        if (saveSettingsMsg) saveSettingsMsg.textContent = "Открываю выбор папки…";
+        try {
+          const r = await fetch("/api/pick-folder", { method: "POST" });
+          const j = await r.json();
+          if (!r.ok) {
+            if (saveSettingsMsg) saveSettingsMsg.textContent = "Ошибка: " + (j.error || r.statusText);
+            return;
+          }
+          targetInput.value = j.path || "";
+          if (saveSettingsMsg) saveSettingsMsg.textContent = "Папка выбрана. Нажмите «Сохранить настройки».";
+        } catch (e) {
+          if (saveSettingsMsg) saveSettingsMsg.textContent = "Ошибка сети: " + e;
+        } finally {
+          btn.disabled = false;
+          if (saveSettingsMsg && saveSettingsMsg.textContent === "Открываю выбор папки…") {
+            saveSettingsMsg.textContent = prev;
+          }
+        }
+      });
+    });
+
+    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && bifDownloadDirInput && bifArchiveDirInput && ecuadorTemplateInput && ecuadorOutputInput) {
       saveSettingsBtn.addEventListener("click", async () => {
         const payload = {
           biflorica_min_age_days: Number.parseInt(bifMinInput.value, 10),
           biflorica_max_age_days: Number.parseInt(bifMaxInput.value, 10),
+          biflorica_download_dir: bifDownloadDirInput.value.trim(),
+          biflorica_archive_dir: bifArchiveDirInput.value.trim(),
+          ecuador_template_path: ecuadorTemplateInput.value.trim(),
+          ecuador_output_dir: ecuadorOutputInput.value.trim(),
           delmir_lookback_days: Number.parseInt(delmirLookbackInput.value, 10),
           mail_lookback_days: Number.parseInt(lookbackInput.value, 10),
         };
