@@ -552,24 +552,34 @@ async def run_biflorica_job(
                 downloaded_ids.add(order.order_id)
                 await job_manager.add_downloaded(job_id, str(dest))
                 await lg(f"Сохранено: {dest}")
-                if sys.platform == "win32":
+                if sys.platform != "win32":
+                    await lg("Эквадор: пропуск (нужен Windows + Excel)")
+                else:
+                    await lg("Эквадор: запуск обработки (Excel)…")
                     try:
                         from cvetopt.invoice.ecuador_create import (
                             create_ecuador_file_from_biflorica,
                         )
 
+                        ecuador_log_lines: list[str] = []
+
+                        def _ecuador_log(msg: str) -> None:
+                            ecuador_log_lines.append(msg)
+                            logger.info("[job {}] {}", job_id, msg)
+
                         out = await asyncio.to_thread(
                             create_ecuador_file_from_biflorica,
                             dest,
                             env,
+                            log=_ecuador_log,
                         )
-                        await job_log(job_id, f"Эквадор: создан файл → {out}")
+                        for msg in ecuador_log_lines:
+                            await lg(msg)
+                        await lg(f"Эквадор: создан файл → {out}")
                         await job_manager.add_downloaded(job_id, str(out))
                     except Exception as e:
                         await lg(f"Эквадор (не создан): {e}")
                         logger.exception("ecuador create failed")
-                else:
-                    await lg("Эквадор: пропуск (нужен Windows + Excel)")
                 await asyncio.sleep(random.uniform(1.0, 3.0))
 
             await lg("Готово.")
