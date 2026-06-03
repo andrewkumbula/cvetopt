@@ -26,11 +26,21 @@ _BIFLORICA_REPORT_STEM_RE = re.compile(
     r"^(?:BiFlorica-)?\d+__\d{4}-\d{2}-\d{2}$",
     re.IGNORECASE,
 )
+_BIFLORICA_ORDER_ID_FROM_FILE_RE = re.compile(
+    r"^(?:BiFlorica-)?(\d+)__\d{4}-\d{2}-\d{2}$",
+    re.IGNORECASE,
+)
 
 
 def biflorica_download_filename(order_id: str, flight_date: date) -> str:
     """Имя xlsx отчёта в папке скачивания (префикс BiFlorica- для отличия от прочих файлов)."""
     return f"{BIFLORICA_DOWNLOAD_PREFIX}{order_id}__{flight_date.isoformat()}.xlsx"
+
+
+def order_id_from_biflorica_report(path: Path) -> str | None:
+    """Номер заказа из имени BiFlorica-<id>__<дата>.xlsx или <id>__<дата>.xlsx."""
+    m = _BIFLORICA_ORDER_ID_FROM_FILE_RE.match(path.stem)
+    return m.group(1) if m else None
 
 
 class RuntimeSettings(BaseModel):
@@ -197,6 +207,34 @@ def _copy_with_retries(src: Path, target: Path, attempts: int = 4) -> None:
         raise last_err
 
 
+def _format_archive_oserror(src: Path, target: Path, exc: OSError, phase: str) -> str:
+    """Понятное сообщение для WinError 5 при архивировании Biflorica."""
+    import getpass
+
+    user = getpass.getuser()
+    base = f"{src.name}: {phase} — {exc}"
+    if not _is_access_denied(exc):
+        return base
+    hints: list[str] = []
+    if phase.startswith("копирование"):
+        if not os.access(src, os.R_OK):
+            hints.append(f"нет чтения файла «{src}»")
+        if not os.access(target.parent, os.W_OK):
+            hints.append(f"нет записи в папку архива «{target.parent}»")
+        if not hints:
+            hints.append("файл может быть открыт в Excel — закройте книгу")
+    elif phase.startswith("удаление"):
+        hints.append("копия уже в архиве; исходник не удалён")
+        if not os.access(src.parent, os.W_OK):
+            hints.append(f"нет прав на изменение «{src.parent}»")
+    detail = "; ".join(hints) if hints else "отказано в доступе (WinError 5)"
+    return (
+        f"{src.name}: {detail}. Процесс: «{user}». "
+        "Запускайте cvetopt.bat под той же учёткой, что создаёт файлы в C:\\Invoice, "
+        "или выдайте Modify на папку скачивания и архив (см. README_WIN.md §4.4)."
+    )
+
+
 def _archive_one_entry(src: Path, target: Path) -> str | None:
     """
     Переносит элемент в архив. На Windows — копирование + удаление (надёжнее move).
@@ -212,16 +250,16 @@ def _archive_one_entry(src: Path, target: Path) -> str | None:
         return None
 
     if sys.platform == "win32":
-        _copy_with_retries(src, target)
+        try:
+            _copy_with_retries(src, target)
+        except OSError as e:
+            raise OSError(_format_archive_oserror(src, target, e, "копирование в архив")) from e
         try:
             src.unlink()
             return None
         except OSError as e:
             if _is_access_denied(e):
-                return (
-                    f"{src.name}: копия в архиве есть ({target}), исходник не удалён — "
-                    "файл занят другим процессом или нет прав на удаление"
-                )
+                return _format_archive_oserror(src, target, e, "удаление исходника")
             raise
 
     try:
@@ -241,29 +279,39 @@ def _archive_one_entry(src: Path, target: Path) -> str | None:
 def archive_biflorica_download_dir(
     download_dir: Path,
     archive_dir: Path,
-) -> tuple[Path | None, list[str], list[str]]:
+    *,
+    keep_order_ids: set[str] | None = None,
+) -> tuple[Path | None, list[str], list[str], list[str]]:
     """
     Переносит в <папка архива>/<YYYY-MM-DD_HHMMSS>/ только xlsx/xls отчётов Biflorica
     из корня папки скачивания (имя начинается с BiFlorica- или старый <order_id>__<дата>.xlsx).
+    Файлы заказов из keep_order_ids (реестр «уже скачано») не трогает.
     Подпапки (Обработка, старые архивы, Задачи) и .xlsm/.lnk не трогает.
     """
     if not download_dir.is_dir():
-        return None, [], []
+        return None, [], [], []
 
     archive_dir = archive_dir.resolve()
     download_dir = download_dir.resolve()
     if archive_dir == download_dir:
         raise ValueError("Папка архива не может совпадать с папкой скачивания.")
 
+    keep = keep_order_ids or set()
     to_move: list[Path] = []
+    kept: list[str] = []
     for entry in download_dir.iterdir():
         if _is_archive_entry(entry, archive_dir, download_dir):
             continue
-        if _is_biflorica_report_to_archive(entry):
-            to_move.append(entry)
+        if not _is_biflorica_report_to_archive(entry):
+            continue
+        order_id = order_id_from_biflorica_report(entry)
+        if order_id and order_id in keep:
+            kept.append(entry.name)
+            continue
+        to_move.append(entry)
 
     if not to_move:
-        return None, [], []
+        return None, [], [], kept
 
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     dest_dir = archive_dir / stamp
@@ -271,6 +319,19 @@ def archive_biflorica_download_dir(
 
     moved: list[str] = []
     warnings: list[str] = []
+    if sys.platform == "win32":
+        import getpass
+
+        user = getpass.getuser()
+        if not os.access(download_dir, os.W_OK | os.R_OK):
+            warnings.append(
+                f"Папка скачивания {download_dir}: нет чтения/записи для «{user}»."
+            )
+        if not os.access(archive_dir, os.W_OK):
+            warnings.append(
+                f"Папка архива {archive_dir}: нет записи для «{user}» — "
+                "выдайте Modify (M) на эту папку."
+            )
     access_hint_shown = False
     for src in sorted(to_move, key=lambda p: p.name.lower()):
         target = _archive_target_path(dest_dir, src, stamp)
@@ -294,7 +355,7 @@ def archive_biflorica_download_dir(
         except OSError as e:
             warnings.append(f"{src.name}: не удалось архивировать — {e}")
 
-    return dest_dir, moved, warnings
+    return dest_dir, moved, warnings, kept
 
 
 def validate_biflorica_download_dir(env: EnvSettings, raw_dir: str) -> str | None:

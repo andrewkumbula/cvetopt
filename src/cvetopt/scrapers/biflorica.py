@@ -395,6 +395,9 @@ async def run_biflorica_job(
     )
     archive_base.mkdir(parents=True, exist_ok=True)
 
+    registry = DownloadRegistry(registry_path)
+    downloaded_ids = registry.load()
+
     if sys.platform == "win32":
         await job_log(
             job_id,
@@ -402,9 +405,18 @@ async def run_biflorica_job(
             f"(запускайте cvetopt.bat под тем же пользователем, что работает с C:\\Invoice)",
         )
     try:
-        archive_dir, archived_names, archive_warnings = archive_biflorica_download_dir(
-            download_dir, archive_base
+        archive_dir, archived_names, archive_warnings, kept_names = (
+            archive_biflorica_download_dir(
+                download_dir,
+                archive_base,
+                keep_order_ids=downloaded_ids,
+            )
         )
+        if kept_names:
+            await job_log(
+                job_id,
+                f"Архив: оставлено в папке (уже в реестре): {len(kept_names)}",
+            )
         if archive_dir is not None:
             await job_log(
                 job_id,
@@ -414,9 +426,6 @@ async def run_biflorica_job(
                 await job_log(job_id, f"Архив: {warn}")
     except Exception as e:
         await job_log(job_id, f"Архивирование пропущено: {e}")
-
-    registry = DownloadRegistry(registry_path)
-    downloaded_ids = registry.load()
     await job_log(job_id, f"Папка скачивания: {download_dir}")
     await job_log(job_id, f"Уже в реестре заказов: {len(downloaded_ids)}")
 
