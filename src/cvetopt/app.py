@@ -27,6 +27,7 @@ from cvetopt.core.runtime_settings import (
 from cvetopt.core.settings import EnvSettings, SelectionOverride
 from cvetopt.core.testing_reset import reset_testing_state
 from cvetopt.scrapers.auto1_pipeline import run_auto1_pipeline_job
+from cvetopt.scrapers.holland_translate import run_holland_translate_job
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
 from cvetopt.scrapers.delmir import run_delmir_transport_job
@@ -331,6 +332,18 @@ async def run_auto1_pipeline_route(request: Request):
     env = EnvSettings()
     job = job_manager.create_job("auto1_pipeline")
     job_manager.schedule(job.id, run_auto1_pipeline_job(job.id, env))
+    return RedirectResponse(url=f"/job/{job.id}", status_code=303)
+
+
+@app.post("/run/holland-translate")
+async def run_holland_translate_route(request: Request):
+    """Перевод Description в Голландия_1_*.xlsx по Словарь.xls (отдельная кнопка)."""
+    busy = _reject_if_busy()
+    if busy is not None:
+        return busy
+    env = EnvSettings()
+    job = job_manager.create_job("holland_translate")
+    job_manager.schedule(job.id, run_holland_translate_job(job.id, env))
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 

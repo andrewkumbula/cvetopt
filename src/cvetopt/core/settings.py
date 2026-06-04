@@ -167,9 +167,14 @@ class Auto1PipelineConfig(BaseModel):
     sheet_name: str = "auto1"
     backup_before_run: bool = True
     backup_suffix: str = ".bak"
+
+
+class HollandTranslateConfig(BaseModel):
+    """Перевод Description в Голландия_1_*.xlsx по Словарь.xls (B → C)."""
+
+    enabled: bool = True
     sklad_output_dir: str = r"C:\Инвойсы склад"
     dictionary_path: str = "Invoice/Словарь.xls"
-    translate_holland_export: bool = True
 
 
 class DelmirSelectors(BaseModel):
@@ -242,6 +247,7 @@ class AppYamlConfig(BaseModel):
     portals: PortalsConfig = Field(default_factory=PortalsConfig)
     balance_auto: BalanceAutoConfig = Field(default_factory=BalanceAutoConfig)
     auto1_pipeline: Auto1PipelineConfig = Field(default_factory=Auto1PipelineConfig)
+    holland_translate: HollandTranslateConfig = Field(default_factory=HollandTranslateConfig)
     delmir: DelmirConfig = Field(default_factory=DelmirConfig)
     mail: MailConfig = Field(default_factory=MailConfig)
 
