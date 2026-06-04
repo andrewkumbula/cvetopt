@@ -165,20 +165,48 @@ async def api_runtime_settings_update(request: Request) -> JSONResponse:
         )
 
 
-def _pick_folder_native() -> str | None:
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except ImportError:
-        return None
+def _tk_dialog_root():
+    import tkinter as tk
+
     root = tk.Tk()
     root.withdraw()
     try:
         root.attributes("-topmost", True)
     except tk.TclError:
         pass
+    return root
+
+
+def _pick_folder_native() -> str | None:
+    try:
+        from tkinter import filedialog
+    except ImportError:
+        return None
+    root = _tk_dialog_root()
     try:
         return filedialog.askdirectory() or None
+    finally:
+        root.destroy()
+
+
+def _pick_file_native() -> str | None:
+    try:
+        from tkinter import filedialog
+    except ImportError:
+        return None
+    root = _tk_dialog_root()
+    try:
+        return (
+            filedialog.askopenfilename(
+                title="Выберите Auto_new.xls",
+                filetypes=[
+                    ("Книга Excel (.xls)", "*.xls"),
+                    ("Excel", "*.xls *.xlsx *.xlsm"),
+                    ("Все файлы", "*.*"),
+                ],
+            )
+            or None
+        )
     finally:
         root.destroy()
 
@@ -190,6 +218,18 @@ async def api_pick_folder() -> JSONResponse:
     if path is None:
         return JSONResponse(
             {"error": "Диалог недоступен или папка не выбрана. Введите путь вручную."},
+            status_code=503,
+        )
+    return JSONResponse({"path": path})
+
+
+@app.post("/api/pick-file")
+async def api_pick_file() -> JSONResponse:
+    """Системный диалог выбора файла (tkinter), только для локального UI."""
+    path = await asyncio.to_thread(_pick_file_native)
+    if path is None:
+        return JSONResponse(
+            {"error": "Диалог недоступен или файл не выбран. Введите путь вручную."},
             status_code=503,
         )
     return JSONResponse({"path": path})

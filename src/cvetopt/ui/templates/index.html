@@ -243,10 +243,11 @@
           class="input-path"
           type="text"
           name="auto_new_workbook_path"
-          placeholder="Auto_new.xls или C:\Apps\cvetopt\Auto_new.xls"
+          placeholder="C:\Apps\cvetopt\Auto_new.xls или относительный путь"
           value="{{ runtime_settings.auto_new_workbook_path|default('Auto_new.xls') }}"
           spellcheck="false"
         />
+        <button type="button" data-pick-target="auto_new_workbook" data-pick-mode="file">Выбрать…</button>
       </div>
       <label for="ecuador_template" class="muted">Эквадор, шаблон .xlsm:</label>
       <div class="path-row">
@@ -501,23 +502,34 @@
         const targetId = btn.dataset.pickTarget;
         const targetInput = targetId ? document.getElementById(targetId) : null;
         if (!targetInput) return;
+        const pickFile = btn.dataset.pickMode === "file";
+        const apiUrl = pickFile ? "/api/pick-file" : "/api/pick-folder";
         btn.disabled = true;
         const prev = saveSettingsMsg ? saveSettingsMsg.textContent : "";
-        if (saveSettingsMsg) saveSettingsMsg.textContent = "Открываю выбор папки…";
+        if (saveSettingsMsg) {
+          saveSettingsMsg.textContent = pickFile
+            ? "Открываю выбор файла…"
+            : "Открываю выбор папки…";
+        }
         try {
-          const r = await fetch("/api/pick-folder", { method: "POST" });
+          const r = await fetch(apiUrl, { method: "POST" });
           const j = await r.json();
           if (!r.ok) {
             if (saveSettingsMsg) saveSettingsMsg.textContent = "Ошибка: " + (j.error || r.statusText);
             return;
           }
           targetInput.value = j.path || "";
-          if (saveSettingsMsg) saveSettingsMsg.textContent = "Папка выбрана. Нажмите «Сохранить настройки».";
+          if (saveSettingsMsg) {
+            saveSettingsMsg.textContent = pickFile
+              ? "Файл выбран. Нажмите «Сохранить настройки»."
+              : "Папка выбрана. Нажмите «Сохранить настройки».";
+          }
         } catch (e) {
           if (saveSettingsMsg) saveSettingsMsg.textContent = "Ошибка сети: " + e;
         } finally {
           btn.disabled = false;
-          if (saveSettingsMsg && saveSettingsMsg.textContent === "Открываю выбор папки…") {
+          const busyMsg = pickFile ? "Открываю выбор файла…" : "Открываю выбор папки…";
+          if (saveSettingsMsg && saveSettingsMsg.textContent === busyMsg) {
             saveSettingsMsg.textContent = prev;
           }
         }
