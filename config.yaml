@@ -78,6 +78,9 @@ auto1_pipeline:
   sheet_name: auto1
   backup_before_run: true
   backup_suffix: ".bak"
+  sklad_output_dir: "C:\\Инвойсы склад"
+  dictionary_path: Invoice/Словарь.xls
+  translate_holland_export: true
 
 # Загрузка «Транспорт трак» с del-mir.com по AWB из Auto_new.xls — отдельная кнопка.
 delmir:

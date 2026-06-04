@@ -167,6 +167,9 @@ class Auto1PipelineConfig(BaseModel):
     sheet_name: str = "auto1"
     backup_before_run: bool = True
     backup_suffix: str = ".bak"
+    sklad_output_dir: str = r"C:\Инвойсы склад"
+    dictionary_path: str = "Invoice/Словарь.xls"
+    translate_holland_export: bool = True
 
 
 class DelmirSelectors(BaseModel):
