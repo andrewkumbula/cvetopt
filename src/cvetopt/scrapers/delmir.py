@@ -635,8 +635,19 @@ async def run_delmir_transport_job(
     async def lg(msg: str) -> None:
         await job_log(job_id, msg)
 
-    root = env.project_root
-    wb_path: Path = (root / bcfg.workbook_path).resolve()
+    from cvetopt.core.runtime_settings import (
+        effective_auto_new_workbook_raw,
+        load_runtime_settings,
+        resolve_auto_new_workbook,
+    )
+
+    runtime = load_runtime_settings(env)
+    wb_raw = effective_auto_new_workbook_raw(
+        runtime,
+        yaml_auto1=yaml_cfg.auto1_pipeline.workbook_path,
+        yaml_balance=bcfg.workbook_path,
+    )
+    wb_path = resolve_auto_new_workbook(env, wb_raw)
     if not wb_path.exists():
         raise FileNotFoundError(wb_path)
 
@@ -651,7 +662,7 @@ async def run_delmir_transport_job(
         context_opts: dict = {
             "viewport": {"width": 1400, "height": 900},
         }
-        sess_path = root / "data" / "sessions" / "delmir.json"
+        sess_path = env.project_root / "data" / "sessions" / "delmir.json"
         if sess_path.exists():
             context_opts["storage_state"] = str(sess_path)
         context = await browser.new_context(**context_opts)

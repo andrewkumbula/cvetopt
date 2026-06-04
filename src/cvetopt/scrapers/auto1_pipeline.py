@@ -3,6 +3,11 @@ from __future__ import annotations
 import asyncio
 
 from cvetopt.core.job_manager import job_log
+from cvetopt.core.runtime_settings import (
+    effective_auto_new_workbook_raw,
+    load_runtime_settings,
+    resolve_auto_new_workbook,
+)
 from cvetopt.core.settings import EnvSettings
 from cvetopt.invoice.auto1_pipeline import run_auto1_pipeline
 
@@ -15,8 +20,14 @@ async def run_auto1_pipeline_job(job_id: str, env: EnvSettings) -> None:
         await job_log(job_id, "auto1_pipeline отключён в config.yaml")
         return
 
-    root = env.project_root
-    wb_path = (root / cfg.workbook_path).resolve()
+    runtime = load_runtime_settings(env)
+    wb_raw = effective_auto_new_workbook_raw(
+        runtime,
+        yaml_auto1=cfg.workbook_path,
+        yaml_balance=yaml_cfg.balance_auto.workbook_path,
+    )
+    wb_path = resolve_auto_new_workbook(env, wb_raw)
+    await job_log(job_id, f"Книга Auto_new: {wb_path}")
 
     async def lg(msg: str) -> None:
         await job_log(job_id, msg)

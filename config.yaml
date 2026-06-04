@@ -38,6 +38,7 @@ portals:
 # Заполнение Auto_new.xls с баланса (лист «АВБ перелеты») — отдельная кнопка в UI.
 balance_auto:
   enabled: true
+  # Путь по умолчанию; в UI «Настройки» поле Auto_new.xls перекрывает для balance/delmir/auto1.
   workbook_path: Auto_new.xls
   sheet_name: "АВБ перелеты"
   balance_url: "https://ec.term.biflorica.ru/marketPlaceNew/balance"
@@ -72,6 +73,7 @@ balance_auto:
 # Лист auto1: Scan → Import → Calculate → Sort → for sklad (макросы в Auto_new.xls, Windows + Excel).
 auto1_pipeline:
   enabled: true
+  # Если в runtime_settings.json пусто — используется этот путь (см. balance_auto).
   workbook_path: Auto_new.xls
   sheet_name: auto1
   backup_before_run: true

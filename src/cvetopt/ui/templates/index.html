@@ -236,6 +236,18 @@
         />
         <button id="pick-bif-archive-btn" type="button" data-pick-target="bif_archive_dir">Выбрать…</button>
       </div>
+      <label for="auto_new_workbook" class="muted">Auto_new.xls (баланс, auto1, del-mir):</label>
+      <div class="path-row">
+        <input
+          id="auto_new_workbook"
+          class="input-path"
+          type="text"
+          name="auto_new_workbook_path"
+          placeholder="Auto_new.xls или C:\Apps\cvetopt\Auto_new.xls"
+          value="{{ runtime_settings.auto_new_workbook_path|default('Auto_new.xls') }}"
+          spellcheck="false"
+        />
+      </div>
       <label for="ecuador_template" class="muted">Эквадор, шаблон .xlsm:</label>
       <div class="path-row">
         <input
@@ -361,6 +373,7 @@
     const mailDirLongInput = document.getElementById("mail_dir_long");
     const bifDownloadDirInput = document.getElementById("bif_download_dir");
     const bifArchiveDirInput = document.getElementById("bif_archive_dir");
+    const autoNewWorkbookInput = document.getElementById("auto_new_workbook");
     const ecuadorTemplateInput = document.getElementById("ecuador_template");
     const ecuadorOutputInput = document.getElementById("ecuador_output");
     const pickFolderBtns = document.querySelectorAll("[data-pick-target]");
@@ -554,7 +567,7 @@
       });
     }
 
-    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && bifDownloadDirInput && bifArchiveDirInput && ecuadorTemplateInput && ecuadorOutputInput) {
+    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && ecuadorTemplateInput && ecuadorOutputInput) {
       const parseDays = (input, fallback) => {
         const n = Number.parseInt(input.value, 10);
         return Number.isFinite(n) ? n : fallback;
@@ -565,6 +578,7 @@
           biflorica_max_age_days: parseDays(bifMaxInput, 7),
           biflorica_download_dir: bifDownloadDirInput.value.trim(),
           biflorica_archive_dir: bifArchiveDirInput.value.trim(),
+          auto_new_workbook_path: autoNewWorkbookInput.value.trim(),
           ecuador_template_path: ecuadorTemplateInput.value.trim(),
           ecuador_output_dir: ecuadorOutputInput.value.trim(),
           delmir_lookback_days: parseDays(delmirLookbackInput, 14),

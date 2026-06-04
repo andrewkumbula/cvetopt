@@ -282,8 +282,19 @@ async def run_balance_auto_job(job_id: str, env: EnvSettings) -> None:
         await job_log(job_id, "balance_auto отключён в config.yaml")
         return
 
-    root = env.project_root
-    wb_path = (root / bcfg.workbook_path).resolve()
+    from cvetopt.core.runtime_settings import (
+        effective_auto_new_workbook_raw,
+        load_runtime_settings,
+        resolve_auto_new_workbook,
+    )
+
+    runtime = load_runtime_settings(env)
+    wb_raw = effective_auto_new_workbook_raw(
+        runtime,
+        yaml_auto1=yaml_cfg.auto1_pipeline.workbook_path,
+        yaml_balance=bcfg.workbook_path,
+    )
+    wb_path = resolve_auto_new_workbook(env, wb_raw)
 
     async def lg(msg: str) -> None:
         await job_log(job_id, msg)
@@ -294,7 +305,7 @@ async def run_balance_auto_job(job_id: str, env: EnvSettings) -> None:
     if not email or not password:
         raise RuntimeError("Задайте BIFLORICA_EMAIL и BIFLORICA_PASSWORD в .env")
 
-    session_path = root / "data" / "sessions" / "biflorica.json"
+    session_path = env.project_root / "data" / "sessions" / "biflorica.json"
     today = date.today()
 
     async with async_playwright() as p:
