@@ -78,9 +78,107 @@ def _preflight(cfg: Auto1PipelineConfig, workbook_path: Path, log: LogFn) -> Non
         log(f"Файл цен: {prices[0].name}")
 
 
-def _run_sheet_macro(app: object, sheet: object, macro: str) -> None:
-    codename = sheet.api.CodeName
-    app.api.Run(f"'{codename}'.{macro}")
+CV_RUNNER_PREFIX = "cv_Run_"
+
+
+def _runner_name(macro: str) -> str:
+    return f"{CV_RUNNER_PREFIX}{macro}"
+
+
+def _ensure_sheet_runner(wb: object, codename: str, macro: str) -> str:
+    """
+    Public-обёртка в модуле листа (тот же модуль, что Private btn*_Click).
+    Требует «Доверять доступ к объектной модели VBA» в Excel.
+    """
+    runner = _runner_name(macro)
+    mod = wb.api.VBProject.VBComponents(codename).CodeModule
+    line_count = int(mod.CountOfLines)
+    existing = mod.Lines(1, line_count) if line_count else ""
+    if f"Sub {runner}" in existing:
+        return runner
+    proc = f"\r\nPublic Sub {runner}()\r\n    {macro}\r\nEnd Sub\r\n"
+    mod.InsertLines(line_count + 1, proc)
+    return runner
+
+
+def _try_run(app: object, spec: str) -> None:
+    app.api.Run(spec)
+
+
+def _run_via_form_on_action(app: object, sheet: object, macro: str) -> str | None:
+    """Кнопки Form Control с OnAction (не ActiveX)."""
+    for i in range(1, int(sheet.api.Shapes.Count) + 1):
+        shp = sheet.api.Shapes(i)
+        try:
+            on_action = (shp.OnAction or "").strip()
+        except Exception:
+            on_action = ""
+        if not on_action:
+            continue
+        if macro in on_action or on_action.endswith(macro):
+            _try_run(app, on_action)
+            return on_action
+    return None
+
+
+def _invoke_sheet_click_macro(
+    app: object,
+    wb: object,
+    sheet: object,
+    macro: str,
+    log: LogFn,
+) -> None:
+    """
+    btn*_Click в Auto_new.xls — Private Sub в модуле листа (Лист1.cls).
+    Application.Run("'Лист1'.btnScan_Click") их не видит; в списке макросов (Alt+F8)
+    только Public вроде ActualCurs1.
+    """
+    codename = str(sheet.api.CodeName)
+    sheet_name = str(sheet.name)
+    wb_name = str(wb.name)
+    errors: list[str] = []
+
+    try:
+        via = _run_via_form_on_action(app, sheet, macro)
+        if via:
+            log(f"  → OnAction: {via}")
+            return
+    except Exception as e:
+        errors.append(f"OnAction: {e}")
+
+    candidates = (
+        f"{codename}.{macro}",
+        f"'{codename}'.{macro}",
+        f"'{sheet_name}'!{macro}",
+        f"'{codename}'!{macro}",
+        f"'{wb_name}'!{macro}",
+        macro,
+    )
+    for spec in candidates:
+        try:
+            _try_run(app, spec)
+            log(f"  → Application.Run({spec!r})")
+            return
+        except Exception as e:
+            errors.append(f"{spec}: {e!s}")
+
+    try:
+        runner = _ensure_sheet_runner(wb, codename, macro)
+        spec = f"'{codename}'.{runner}"
+        _try_run(app, spec)
+        log(f"  → обёртка {runner} в модуле {codename}")
+        return
+    except Exception as e:
+        errors.append(f"обёртка VBA: {e!s}")
+
+    hint = (
+        "Обработчики кнопок (btnScan_Click и др.) в книге объявлены как Private Sub. "
+        "Включите в Excel: Файл → Параметры → Центр управления безопасностью → "
+        "Параметры макросов → «Доверять доступ к объектной модели VBA-проекта» "
+        "(Trust access to the VBA project object model), затем повторите прогон."
+    )
+    tail = "; ".join(errors[-4:]) if errors else "нет деталей"
+    raise RuntimeError(f"Не удалось вызвать {macro}. {hint} ({tail})")
 
 
 def run_auto1_pipeline(
@@ -127,6 +225,11 @@ def run_auto1_pipeline(
         app.display_alerts = False
         app.screen_updating = False
         app.api.EnableEvents = True
+        # 1 = msoAutomationSecurityLow — иначе Run может блокироваться политикой.
+        try:
+            app.api.AutomationSecurity = 1
+        except Exception:
+            pass
 
         wb = app.books.open(str(path))
         try:
@@ -143,7 +246,7 @@ def run_auto1_pipeline(
 
         for label, macro in PIPELINE_STEPS:
             _lg(f"Шаг «{label}»: {macro}…")
-            _run_sheet_macro(app, sheet, macro)
+            _invoke_sheet_click_macro(app, wb, sheet, macro, _lg)
             done.append(Auto1StepResult(label=label, macro=macro))
             _lg(f"Шаг «{label}» завершён.")
 
