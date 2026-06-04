@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import io
+import os
 import re
+import stat
+import sys
+import time
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -94,6 +99,41 @@ def _insert_cell_sorted(row: ET.Element, cell: ET.Element, ref: str) -> None:
     row.append(cell)
 
 
+def _writable_win_errors(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (5, 32):
+        return True
+    return False
+
+
+def _write_bytes_with_retry(path: Path, data: bytes, *, attempts: int = 12) -> None:
+    """Прямая запись в xlsx (без rename .tmp) — меньше конфликтов с Excel на Windows."""
+    last_err: BaseException | None = None
+    for i in range(attempts):
+        try:
+            if path.exists():
+                try:
+                    os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+                except OSError:
+                    pass
+            with path.open("wb") as fh:
+                fh.write(data)
+            return
+        except (PermissionError, OSError) as e:
+            last_err = e
+            if not _writable_win_errors(e):
+                raise
+            time.sleep(0.35 * (i + 1))
+    hint = (
+        f"Не удалось записать {path}. "
+        "Закройте этот файл в Excel (и проводнике) и снова нажмите «Перевод»."
+    )
+    if sys.platform == "win32":
+        hint += " Если файл только что создан auto1 — подождите 2–3 сек."
+    raise PermissionError(hint) from last_err
+
+
 def _first_sheet_path(names: list[str]) -> str | None:
     return next(
         (n for n in names if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")),
@@ -134,7 +174,6 @@ def patch_xlsx_cell_values(path: Path, updates: dict[str, str | None]) -> int:
             cell = _find_cell(row, ref)
             if cell is None:
                 style = None
-                left_ref = f"{col_l}{row_n}"
                 # стиль с ячейки слева (Description), если есть
                 for c in row.findall("m:c", _NS):
                     cr = c.get("r", "")
@@ -162,11 +201,11 @@ def patch_xlsx_cell_values(path: Path, updates: dict[str, str | None]) -> int:
 
         ET.register_namespace("", _NS_URI)
         out_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-        tmp = path.with_suffix(path.suffix + ".patch.tmp")
-        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zout:
             for name in zf.namelist():
-                data = out_xml if name == sheet_name else zf.read(name)
+                part = out_xml if name == sheet_name else zf.read(name)
                 zinfo = zf.getinfo(name)
-                zout.writestr(zinfo, data)
-        tmp.replace(path)
+                zout.writestr(zinfo, part)
+        _write_bytes_with_retry(path, buffer.getvalue())
     return changed
