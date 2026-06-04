@@ -8,6 +8,8 @@ from cvetopt.invoice.description_dictionary import (
     load_description_dictionary,
     lookup_translation,
 )
+from cvetopt.invoice.xlsx_patch import patch_xlsx_cell_values
+from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
 LogFn = Callable[[str], None]
 
@@ -72,10 +74,8 @@ def translate_holland_export(
 ) -> tuple[int, int, int]:
     """
     Заполняет столбец справа от Description переводом из словаря.
-    Возвращает (переведено, без_перевода, всего_строк_данных).
+    Сохраняет xlsx через точечный XML-патч (чекбоксы VBA не удаляются).
     """
-    import openpyxl
-
     _lg = log or _default_log
     export_path = export_path.resolve()
     dictionary = load_description_dictionary(dictionary_path)
@@ -84,49 +84,48 @@ def translate_holland_export(
 
     _lg(f"Словарь: {len(dictionary)} записей из {dictionary_path.name}")
 
-    wb = openpyxl.load_workbook(export_path)
-    ws = wb.active
-
-    header: dict[str, str] = {}
-    for cell in ws[1]:
-        if cell.value is not None and str(cell.value).strip():
-            header[cell.column_letter] = str(cell.value).strip()
-
+    grid = read_xlsx_grid(export_path)
+    rows = grid_by_row(grid)
+    header = rows.get(1, {})
     cols = _find_description_columns(header)
     if cols is None:
-        wb.close()
         raise RuntimeError(
             f"В {export_path.name} нет заголовка Description в первой строке."
         )
     desc_col, trans_col = cols
     _lg(f"Description → колонка {trans_col} (рядом с {desc_col})")
 
+    updates: dict[str, str | None] = {}
     translated = 0
     missing = 0
     total = 0
-    for row in range(2, ws.max_row + 1):
-        desc_cell = ws[f"{desc_col}{row}"]
-        raw = desc_cell.value
-        if raw is None or str(raw).strip() == "":
+    max_row = max(rows) if rows else 1
+    for row_n in range(2, max_row + 1):
+        row = rows.get(row_n, {})
+        text = _norm_cell(row.get(desc_col, ""))
+        if not text:
             continue
         total += 1
-        text = str(raw).strip()
         tr = lookup_translation(dictionary, text)
-        target = ws[f"{trans_col}{row}"]
+        ref = f"{trans_col}{row_n}"
         if tr:
-            target.value = tr
+            updates[ref] = tr
             translated += 1
         else:
-            target.value = None
+            updates[ref] = None
             missing += 1
 
-    wb.save(export_path)
-    wb.close()
+    patch_xlsx_cell_values(export_path, updates)
     _lg(
         f"Перевод в {export_path.name}: строк {total}, "
-        f"переведено {translated}, без перевода {missing}."
+        f"переведено {translated}, без перевода {missing} "
+        "(файл не пересобирался — чекбоксы сохранены)."
     )
     return translated, missing, total
+
+
+def _norm_cell(val: str) -> str:
+    return str(val or "").strip()
 
 
 def postprocess_holland_after_auto1(

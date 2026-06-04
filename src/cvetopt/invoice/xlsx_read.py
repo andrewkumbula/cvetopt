@@ -31,12 +31,15 @@ def read_xlsx_grid(path: Path) -> dict[str, str]:
             if not ref:
                 continue
             v = cell.find("m:v", _NS)
-            if v is None or v.text is None:
+            if v is not None and v.text is not None:
+                if cell.get("t") == "s":
+                    grid[ref] = shared[int(v.text)]
+                else:
+                    grid[ref] = v.text
                 continue
-            if cell.get("t") == "s":
-                grid[ref] = shared[int(v.text)]
-            else:
-                grid[ref] = v.text
+            is_node = cell.find("m:is", _NS)
+            if is_node is not None:
+                grid[ref] = "".join((n.text or "") for n in is_node.iter())
         return grid
 
 
