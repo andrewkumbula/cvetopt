@@ -5,6 +5,7 @@ import asyncio
 from loguru import logger
 
 from cvetopt.core.job_manager import job_log, job_manager
+from cvetopt.core.runtime_settings import load_runtime_settings
 from cvetopt.core.settings import EnvSettings
 from cvetopt.mail.attachments import collect_mail_attachments
 
@@ -25,7 +26,10 @@ async def run_mail_attachments_job(
         await job_log(job_id, f"Переопределён период поиска писем: {cfg.lookback_days} дн.")
 
     try:
-        paths, log_lines = await asyncio.to_thread(collect_mail_attachments, cfg, env)
+        runtime = load_runtime_settings(env)
+        paths, log_lines = await asyncio.to_thread(
+            collect_mail_attachments, cfg, env, None, runtime
+        )
         for line in log_lines:
             await job_log(job_id, line)
         for p in paths:

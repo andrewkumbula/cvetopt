@@ -23,6 +23,18 @@
     pre { background: #f4f4f4; padding: 1rem; overflow: auto; max-height: 24rem; }
     .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.5rem; flex-wrap: wrap; }
     .danger { background: #fff4f4; border-color: #fbb; }
+    .testing-reset {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      border: 1px solid #e8c4c4;
+      border-radius: 8px;
+      background: #fffafa;
+    }
+    .testing-reset h3 { margin: 0 0 0.75rem 0; font-size: 1rem; }
+    .testing-reset label { display: block; margin: 0.35rem 0; font-size: 0.95rem; }
+    .testing-reset-actions { margin-top: 0.75rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+    #testing-reset-btn { background: #b45309; color: #fff; border: 1px solid #92400e; }
+    #testing-reset-btn:hover:not(:disabled) { background: #92400e; }
     .input-days {
       width: 6rem;
       padding: 0.45rem 0.5rem;
@@ -146,6 +158,15 @@
     </div>
 
     <div class="row">
+      <form method="post" action="/run/auto1-pipeline" data-job-form id="auto1-pipeline-form" class="job-form">
+        <button type="submit" data-job-btn>Auto1: Scan → Import → Calculate → Sort → для склада</button>
+      </form>
+      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
+        Windows + Excel. Инвойс в <code>C:\Invoice\1</code>, цены — один файл в <code>C:\Invoice\1\2</code>.
+      </p>
+    </div>
+
+    <div class="row">
       <form method="post" action="/run/mail-attachments" data-job-form id="mail-form" class="job-form">
         <button type="submit" data-job-btn>Скачать вложения из почты</button>
       </form>
@@ -252,12 +273,58 @@
         step="1"
         value="{{ runtime_settings.mail_lookback_days|default(14) }}"
       />
-      <span></span>
-      <span></span>
+      <label for="mail_short_max_len" class="muted">Почта, короткое имя (симв.):</label>
+      <input
+        id="mail_short_max_len"
+        class="input-days"
+        type="number"
+        min="1"
+        max="500"
+        step="1"
+        value="{{ runtime_settings.mail_filename_short_max_len|default(35) }}"
+        title="Имя файла не длиннее — в папку 1, иначе в папку 2"
+      />
+      <span class="muted" style="grid-column: 2 / -1; font-size: 0.85rem;">≤ этого числа символов в имени → папка 1</span>
+      <label for="mail_dir_short" class="muted">Почта, папка 1 (короткие имена):</label>
+      <div class="path-row">
+        <input
+          id="mail_dir_short"
+          class="input-path"
+          type="text"
+          placeholder="data/downloads/mail/1"
+          value="{{ runtime_settings.mail_output_dir_short|default('data/downloads/mail/1') }}"
+          spellcheck="false"
+        />
+        <button type="button" data-pick-target="mail_dir_short">Выбрать…</button>
+      </div>
+      <label for="mail_dir_long" class="muted">Почта, папка 2 (длинные имена):</label>
+      <div class="path-row">
+        <input
+          id="mail_dir_long"
+          class="input-path"
+          type="text"
+          placeholder="data/downloads/mail/2"
+          value="{{ runtime_settings.mail_output_dir_long|default('data/downloads/mail/2') }}"
+          spellcheck="false"
+        />
+        <button type="button" data-pick-target="mail_dir_long">Выбрать…</button>
+      </div>
     </div>
     <div class="settings-actions">
       <button id="save-settings-btn" type="button">Сохранить настройки</button>
       <span id="save-settings-msg" class="muted"></span>
+    </div>
+    <div class="testing-reset">
+      <h3>Сброс для тестирования</h3>
+      <p class="muted">Пути в настройках выше не меняются — только реестры «уже скачано» и при желании файлы в папках.</p>
+      <label><input type="checkbox" id="reset-bif-registry" checked /> Реестр Biflorica (<code>biflorica_downloaded.json</code>)</label>
+      <label><input type="checkbox" id="reset-mail-registry" checked /> Реестр почты (<code>mail_attachments_downloaded.json</code>)</label>
+      <label><input type="checkbox" id="reset-bif-files" /> Удалить отчёты BiFlorica в папке скачивания</label>
+      <label><input type="checkbox" id="reset-mail-files" /> Удалить xls/xlsx в папках почты (1 и 2)</label>
+      <div class="testing-reset-actions">
+        <button type="button" id="testing-reset-btn">Сбросить для повторного скачивания</button>
+        <span id="testing-reset-msg" class="muted"></span>
+      </div>
     </div>
     <p class="muted settings-hint">
       Сохранённые значения будут использоваться по умолчанию после перезапуска.
@@ -289,6 +356,9 @@
     const delmirLookbackInput = document.getElementById("delmir_lookback_days");
     const mailForm = document.getElementById("mail-form");
     const lookbackInput = document.getElementById("lookback_days");
+    const mailShortMaxLenInput = document.getElementById("mail_short_max_len");
+    const mailDirShortInput = document.getElementById("mail_dir_short");
+    const mailDirLongInput = document.getElementById("mail_dir_long");
     const bifDownloadDirInput = document.getElementById("bif_download_dir");
     const bifArchiveDirInput = document.getElementById("bif_archive_dir");
     const ecuadorTemplateInput = document.getElementById("ecuador_template");
@@ -296,12 +366,15 @@
     const pickFolderBtns = document.querySelectorAll("[data-pick-target]");
     const saveSettingsBtn = document.getElementById("save-settings-btn");
     const saveSettingsMsg = document.getElementById("save-settings-msg");
+    const testingResetBtn = document.getElementById("testing-reset-btn");
+    const testingResetMsg = document.getElementById("testing-reset-msg");
     const tabBtns = document.querySelectorAll("[data-tab-target]");
     const tabPanels = document.querySelectorAll(".tab-panel");
 
     function setBusy(busy) {
       jobBtns.forEach(b => { b.disabled = busy; });
       updateBtn.disabled = busy;
+      if (testingResetBtn) testingResetBtn.disabled = busy;
       if (busy) {
         stateEl.textContent = "идёт прогон…";
         stateEl.classList.add("busy");
@@ -438,7 +511,50 @@
       });
     });
 
-    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && bifDownloadDirInput && bifArchiveDirInput && ecuadorTemplateInput && ecuadorOutputInput) {
+    if (testingResetBtn && testingResetMsg) {
+      testingResetBtn.addEventListener("click", async () => {
+        const bifReg = document.getElementById("reset-bif-registry");
+        const mailReg = document.getElementById("reset-mail-registry");
+        const bifFiles = document.getElementById("reset-bif-files");
+        const mailFiles = document.getElementById("reset-mail-files");
+        const parts = [];
+        if (bifReg && bifReg.checked) parts.push("реестр Biflorica");
+        if (mailReg && mailReg.checked) parts.push("реестр почты");
+        if (bifFiles && bifFiles.checked) parts.push("файлы Biflorica");
+        if (mailFiles && mailFiles.checked) parts.push("файлы почты");
+        if (!parts.length) {
+          testingResetMsg.textContent = "Отметьте хотя бы один пункт.";
+          return;
+        }
+        if (!confirm("Сбросить для теста: " + parts.join(", ") + "?")) return;
+        testingResetBtn.disabled = true;
+        testingResetMsg.textContent = "Сбрасываю…";
+        try {
+          const r = await fetch("/api/testing/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              biflorica_registry: !!(bifReg && bifReg.checked),
+              mail_registry: !!(mailReg && mailReg.checked),
+              biflorica_files: !!(bifFiles && bifFiles.checked),
+              mail_files: !!(mailFiles && mailFiles.checked),
+            }),
+          });
+          const j = await r.json();
+          if (!r.ok) {
+            testingResetMsg.textContent = "Ошибка: " + (j.error || r.statusText);
+            return;
+          }
+          testingResetMsg.textContent = (j.messages || []).join(" · ");
+        } catch (e) {
+          testingResetMsg.textContent = "Ошибка сети: " + e;
+        } finally {
+          testingResetBtn.disabled = false;
+        }
+      });
+    }
+
+    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && bifDownloadDirInput && bifArchiveDirInput && ecuadorTemplateInput && ecuadorOutputInput) {
       const parseDays = (input, fallback) => {
         const n = Number.parseInt(input.value, 10);
         return Number.isFinite(n) ? n : fallback;
@@ -453,6 +569,9 @@
           ecuador_output_dir: ecuadorOutputInput.value.trim(),
           delmir_lookback_days: parseDays(delmirLookbackInput, 14),
           mail_lookback_days: parseDays(lookbackInput, 14),
+          mail_output_dir_short: mailDirShortInput.value.trim(),
+          mail_output_dir_long: mailDirLongInput.value.trim(),
+          mail_filename_short_max_len: parseDays(mailShortMaxLenInput, 35),
         };
         saveSettingsBtn.disabled = true;
         saveSettingsMsg.textContent = "Сохраняю…";

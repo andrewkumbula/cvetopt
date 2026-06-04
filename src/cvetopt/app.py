@@ -21,8 +21,11 @@ from cvetopt.core.runtime_settings import (
     validate_biflorica_archive_dir,
     validate_biflorica_download_dir,
     validate_ecuador_paths,
+    validate_mail_output_dirs,
 )
 from cvetopt.core.settings import EnvSettings, SelectionOverride
+from cvetopt.core.testing_reset import reset_testing_state
+from cvetopt.scrapers.auto1_pipeline import run_auto1_pipeline_job
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
 from cvetopt.scrapers.delmir import run_delmir_transport_job
@@ -145,6 +148,9 @@ async def api_runtime_settings_update(request: Request) -> JSONResponse:
         )
         if ecu_err:
             return JSONResponse({"error": ecu_err}, status_code=422)
+        mail_err = validate_mail_output_dirs(env, settings)
+        if mail_err:
+            return JSONResponse({"error": mail_err}, status_code=422)
 
         save_runtime_settings(env, settings)
         return JSONResponse({"ok": True, "settings": settings.model_dump()})
@@ -183,6 +189,29 @@ async def api_pick_folder() -> JSONResponse:
             status_code=503,
         )
     return JSONResponse({"path": path})
+
+
+@app.post("/api/testing/reset")
+async def api_testing_reset(request: Request) -> JSONResponse:
+    """Сброс реестров (и опционально файлов) для повторного тестового скачивания."""
+    busy = _reject_if_busy()
+    if busy is not None:
+        return busy
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+
+    lines = reset_testing_state(
+        EnvSettings(),
+        biflorica_registry=bool(data.get("biflorica_registry", True)),
+        mail_registry=bool(data.get("mail_registry", True)),
+        biflorica_files=bool(data.get("biflorica_files", False)),
+        mail_files=bool(data.get("mail_files", False)),
+    )
+    return JSONResponse({"ok": True, "messages": lines})
 
 
 def _reject_if_busy() -> JSONResponse | None:
@@ -246,6 +275,18 @@ async def run_balance_auto(
         )
 
     job_manager.schedule(job.id, _chain())
+    return RedirectResponse(url=f"/job/{job.id}", status_code=303)
+
+
+@app.post("/run/auto1-pipeline")
+async def run_auto1_pipeline_route(request: Request):
+    """Лист auto1: Scan → Import → Calculate → Sort → for sklad (VBA через Excel, только Windows)."""
+    busy = _reject_if_busy()
+    if busy is not None:
+        return busy
+    env = EnvSettings()
+    job = job_manager.create_job("auto1_pipeline")
+    job_manager.schedule(job.id, run_auto1_pipeline_job(job.id, env))
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 

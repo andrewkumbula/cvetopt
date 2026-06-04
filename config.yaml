@@ -69,6 +69,14 @@ balance_auto:
     transport_col: "C"
     force_clear_cols: ["C"]
 
+# Лист auto1: Scan → Import → Calculate → Sort → for sklad (макросы в Auto_new.xls, Windows + Excel).
+auto1_pipeline:
+  enabled: true
+  workbook_path: Auto_new.xls
+  sheet_name: auto1
+  backup_before_run: true
+  backup_suffix: ".bak"
+
 # Загрузка «Транспорт трак» с del-mir.com по AWB из Auto_new.xls — отдельная кнопка.
 delmir:
   enabled: true
@@ -98,10 +106,15 @@ mail:
   folder: INBOX
   lookback_days: 14
   output_dir: data/downloads/mail
+  output_dir_short: data/downloads/mail/1
+  output_dir_long: data/downloads/mail/2
+  filename_short_max_len: 35
   only_unread: false
   mark_as_seen: false
   skip_if_filename_exists: true
-  allowed_extensions: [".xlsx", ".xls", ".pdf", ".csv", ".zip"]
+  dedupe_same_content: true
+  clear_price_total_in_short: true
+  allowed_extensions: [".xlsx", ".xls"]
   # Фильтры (пустые списки = все письма за период):
   from_contains: []
   subject_contains: []

@@ -10,15 +10,20 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, Field
 
-from cvetopt.core.settings import EnvSettings, _resolve_selection
+from cvetopt.core.settings import EnvSettings, MailConfig, _resolve_selection
 
 DEFAULT_BIFLORICA_DOWNLOAD_DIR = "data/downloads/biflorica"
 DEFAULT_BIFLORICA_ARCHIVE_DIR = "data/downloads/biflorica/архив"
 DEFAULT_ECUADOR_TEMPLATE = "Invoice/3/Обработка/Прием товара Эквадор-4.xlsm"
 ECUADOR_TEMPLATE_FILENAME = "Прием товара Эквадор-4.xlsm"
 DEFAULT_ECUADOR_OUTPUT_DIR = r"D:\Склад ОБмен\Инвойсы Склад"
+DEFAULT_MAIL_OUTPUT_DIR_SHORT = "data/downloads/mail/1"
+DEFAULT_MAIL_OUTPUT_DIR_LONG = "data/downloads/mail/2"
+DEFAULT_MAIL_FILENAME_SHORT_MAX_LEN = 35
 BIFLORICA_ARCHIVE_LEGACY_NAMES = frozenset({"архив", "archive"})
 BIFLORICA_DOWNLOAD_PREFIX = "BiFlorica-"
 # Скрипт: BiFlorica-<order_id>__<YYYY-MM-DD>.xlsx; старые без префикса тоже в архив.
@@ -52,6 +57,9 @@ class RuntimeSettings(BaseModel):
     ecuador_output_dir: str = Field(default=DEFAULT_ECUADOR_OUTPUT_DIR)
     delmir_lookback_days: int
     mail_lookback_days: int
+    mail_output_dir_short: str = Field(default=DEFAULT_MAIL_OUTPUT_DIR_SHORT)
+    mail_output_dir_long: str = Field(default=DEFAULT_MAIL_OUTPUT_DIR_LONG)
+    mail_filename_short_max_len: int = Field(default=DEFAULT_MAIL_FILENAME_SHORT_MAX_LEN)
 
 
 def _settings_path(env: EnvSettings) -> Path:
@@ -70,7 +78,65 @@ def default_runtime_settings(env: EnvSettings) -> RuntimeSettings:
         ecuador_output_dir=DEFAULT_ECUADOR_OUTPUT_DIR,
         delmir_lookback_days=yaml_cfg.delmir.lookback_days,
         mail_lookback_days=yaml_cfg.mail.lookback_days,
+        mail_output_dir_short=yaml_cfg.mail.output_dir_short,
+        mail_output_dir_long=yaml_cfg.mail.output_dir_long,
+        mail_filename_short_max_len=yaml_cfg.mail.filename_short_max_len,
     )
+
+
+@dataclass(frozen=True)
+class MailOutputLayout:
+    short_dir: Path
+    long_dir: Path
+    short_max_len: int
+
+
+def is_short_mail_filename(filename: str, max_len: int) -> bool:
+    """Короткое имя (обычно дата + короткий суффикс) → папка 1."""
+    return len(filename) <= max_len
+
+
+def resolve_mail_output_layout(
+    env: EnvSettings,
+    runtime: RuntimeSettings,
+    mail_cfg: MailConfig | None = None,
+) -> MailOutputLayout:
+    yaml_mail = (mail_cfg or env.yaml_config().mail)
+    short_raw = (runtime.mail_output_dir_short or "").strip() or yaml_mail.output_dir_short
+    long_raw = (runtime.mail_output_dir_long or "").strip() or yaml_mail.output_dir_long
+    max_len = runtime.mail_filename_short_max_len
+    if max_len < 1:
+        max_len = yaml_mail.filename_short_max_len
+    return MailOutputLayout(
+        short_dir=_resolve_dir(env, short_raw, DEFAULT_MAIL_OUTPUT_DIR_SHORT),
+        long_dir=_resolve_dir(env, long_raw, DEFAULT_MAIL_OUTPUT_DIR_LONG),
+        short_max_len=max_len,
+    )
+
+
+def mail_destination_dir(filename: str, layout: MailOutputLayout) -> Path:
+    if is_short_mail_filename(filename, layout.short_max_len):
+        return layout.short_dir
+    return layout.long_dir
+
+
+def validate_mail_output_dirs(env: EnvSettings, runtime: RuntimeSettings) -> str | None:
+    try:
+        layout = resolve_mail_output_layout(env, runtime)
+    except (OSError, ValueError) as e:
+        return f"Почта: некорректный путь — {e}"
+    if runtime.mail_filename_short_max_len < 1 or runtime.mail_filename_short_max_len > 500:
+        return "Почта: длина «короткого» имени — от 1 до 500 символов."
+    for label, path in (("1 (короткие имена)", layout.short_dir), ("2 (длинные имена)", layout.long_dir)):
+        if path.exists() and not path.is_dir():
+            return f"Почта, папка {label}: путь существует, но это не папка."
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return f"Почта, папка {label}: не удалось создать — {e}"
+    if layout.short_dir.resolve() == layout.long_dir.resolve():
+        return "Почта: папки 1 и 2 не должны совпадать."
+    return None
 
 
 def load_runtime_settings(env: EnvSettings) -> RuntimeSettings:

@@ -159,6 +159,16 @@ class BalanceAutoConfig(BaseModel):
     )
 
 
+class Auto1PipelineConfig(BaseModel):
+    """Цепочка макросов на листе auto1 (Scan → … → for sklad) через Excel на Windows."""
+
+    enabled: bool = True
+    workbook_path: str = "Auto_new.xls"
+    sheet_name: str = "auto1"
+    backup_before_run: bool = True
+    backup_suffix: str = ".bak"
+
+
 class DelmirSelectors(BaseModel):
     """Селекторы del-mir.com — сверены с сохранённой страницей «Мой баланс»."""
 
@@ -192,15 +202,21 @@ class MailConfig(BaseModel):
     use_ssl: bool = True
     folder: str = "INBOX"
     lookback_days: int = 14
-    # Все вложения складываются в одну папку (относительно корня проекта).
+    # Устаревшее: одна папка; если в UI не заданы short/long — берётся как родитель.
     output_dir: str = "data/downloads/mail"
+    output_dir_short: str = "data/downloads/mail/1"
+    output_dir_long: str = "data/downloads/mail/2"
+    # Имя файла (с расширением) не длиннее — в папку «1», иначе в папку «2».
+    filename_short_max_len: int = 35
     only_unread: bool = False
     mark_as_seen: bool = False
+    # Не сохранять второй раз файл с тем же именем (в т.ч. из другого письма).
     skip_if_filename_exists: bool = True
-    # Пустой список = любые вложения с именем файла.
-    allowed_extensions: list[str] = Field(
-        default_factory=lambda: [".xlsx", ".xls", ".pdf", ".csv", ".zip"]
-    )
+    # После загрузки удалить копии: одинаковые байты или одинаковые ячейки в .xls/.xlsx.
+    dedupe_same_content: bool = True
+    # В папке 1 (короткие имена): очистить столбцы price и total после сохранения.
+    clear_price_total_in_short: bool = True
+    allowed_extensions: list[str] = Field(default_factory=lambda: [".xlsx", ".xls"])
     # Пустой список = не фильтровать. Иначе — хотя бы одна подстрока должна совпасть.
     from_contains: list[str] = Field(default_factory=list)
     subject_contains: list[str] = Field(default_factory=list)
@@ -222,6 +238,7 @@ class AppYamlConfig(BaseModel):
     playwright: PlaywrightConfig = Field(default_factory=PlaywrightConfig)
     portals: PortalsConfig = Field(default_factory=PortalsConfig)
     balance_auto: BalanceAutoConfig = Field(default_factory=BalanceAutoConfig)
+    auto1_pipeline: Auto1PipelineConfig = Field(default_factory=Auto1PipelineConfig)
     delmir: DelmirConfig = Field(default_factory=DelmirConfig)
     mail: MailConfig = Field(default_factory=MailConfig)
 
