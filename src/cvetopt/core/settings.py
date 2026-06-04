@@ -174,7 +174,7 @@ class HollandTranslateConfig(BaseModel):
 
     enabled: bool = True
     sklad_output_dir: str = r"C:\Инвойсы склад"
-    dictionary_path: str = "Invoice/Словарь.xls"
+    dictionary_path: str = r"C:\Invoice\Словарь.xls"
 
 
 class DelmirSelectors(BaseModel):

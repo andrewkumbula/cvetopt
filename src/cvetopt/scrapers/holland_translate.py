@@ -4,25 +4,37 @@ import asyncio
 from datetime import date
 
 from cvetopt.core.job_manager import job_log
-from cvetopt.core.runtime_settings import _resolve_dir
+from cvetopt.core.runtime_settings import (
+    effective_holland_dictionary_raw,
+    effective_holland_sklad_dir_raw,
+    load_runtime_settings,
+    resolve_holland_dictionary,
+    resolve_holland_sklad_dir,
+)
 from cvetopt.core.settings import EnvSettings
 from cvetopt.invoice.holland_translate import postprocess_holland_after_auto1
 
 
 async def run_holland_translate_job(job_id: str, env: EnvSettings) -> None:
-    cfg = env.yaml_config().holland_translate
+    yaml_cfg = env.yaml_config()
+    cfg = yaml_cfg.holland_translate
 
     if not cfg.enabled:
         await job_log(job_id, "holland_translate отключён в config.yaml")
         return
 
-    sklad_dir = _resolve_dir(env, cfg.sklad_output_dir, cfg.sklad_output_dir)
-    dict_path = _resolve_dir(env, cfg.dictionary_path, cfg.dictionary_path)
-
-    await job_log(
-        job_id,
-        f"Перевод: папка {sklad_dir}, словарь {dict_path.name} (B → C).",
+    runtime = load_runtime_settings(env)
+    dict_raw = effective_holland_dictionary_raw(
+        runtime, yaml_path=cfg.dictionary_path
     )
+    sklad_raw = effective_holland_sklad_dir_raw(
+        runtime, yaml_dir=cfg.sklad_output_dir
+    )
+    sklad_dir = resolve_holland_sklad_dir(env, sklad_raw)
+    dict_path = resolve_holland_dictionary(env, dict_raw)
+
+    await job_log(job_id, f"Перевод: папка склада {sklad_dir}")
+    await job_log(job_id, f"Перевод: словарь {dict_path} (B → C)")
 
     loop = asyncio.get_running_loop()
 

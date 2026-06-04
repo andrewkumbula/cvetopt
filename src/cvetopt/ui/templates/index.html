@@ -171,7 +171,7 @@
         <button type="submit" data-job-btn>Перевод</button>
       </form>
       <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        Файл <code>Голландия_1_*.xlsx</code> в папке склада, словарь <code>Словарь.xls</code> (B — англ., C — перевод).
+        Пути — в <strong>Настройки</strong> (словарь и папка <code>Голландия_1_*.xlsx</code>).
       </p>
     </div>
 
@@ -257,6 +257,32 @@
           spellcheck="false"
         />
         <button type="button" data-pick-target="auto_new_workbook" data-pick-mode="file">Выбрать…</button>
+      </div>
+      <label for="holland_dictionary" class="muted">Перевод, словарь (B — англ., C — рус.):</label>
+      <div class="path-row">
+        <input
+          id="holland_dictionary"
+          class="input-path"
+          type="text"
+          name="holland_dictionary_path"
+          placeholder="C:\Invoice\Словарь.xls"
+          value="{{ runtime_settings.holland_dictionary_path|default('C:\\Invoice\\Словарь.xls') }}"
+          spellcheck="false"
+        />
+        <button type="button" data-pick-target="holland_dictionary" data-pick-mode="file">Выбрать…</button>
+      </div>
+      <label for="holland_sklad_dir" class="muted">Перевод, папка Голландия_1_*.xlsx:</label>
+      <div class="path-row">
+        <input
+          id="holland_sklad_dir"
+          class="input-path"
+          type="text"
+          name="holland_sklad_output_dir"
+          placeholder="C:\Инвойсы склад"
+          value="{{ runtime_settings.holland_sklad_output_dir|default('C:\\Инвойсы склад') }}"
+          spellcheck="false"
+        />
+        <button type="button" data-pick-target="holland_sklad_dir">Выбрать…</button>
       </div>
       <label for="ecuador_template" class="muted">Эквадор, шаблон .xlsm:</label>
       <div class="path-row">
@@ -384,6 +410,8 @@
     const bifDownloadDirInput = document.getElementById("bif_download_dir");
     const bifArchiveDirInput = document.getElementById("bif_archive_dir");
     const autoNewWorkbookInput = document.getElementById("auto_new_workbook");
+    const hollandDictionaryInput = document.getElementById("holland_dictionary");
+    const hollandSkladDirInput = document.getElementById("holland_sklad_dir");
     const ecuadorTemplateInput = document.getElementById("ecuador_template");
     const ecuadorOutputInput = document.getElementById("ecuador_output");
     const pickFolderBtns = document.querySelectorAll("[data-pick-target]");
@@ -588,7 +616,7 @@
       });
     }
 
-    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && ecuadorTemplateInput && ecuadorOutputInput) {
+    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && hollandDictionaryInput && hollandSkladDirInput && ecuadorTemplateInput && ecuadorOutputInput) {
       const parseDays = (input, fallback) => {
         const n = Number.parseInt(input.value, 10);
         return Number.isFinite(n) ? n : fallback;
@@ -600,6 +628,8 @@
           biflorica_download_dir: bifDownloadDirInput.value.trim(),
           biflorica_archive_dir: bifArchiveDirInput.value.trim(),
           auto_new_workbook_path: autoNewWorkbookInput.value.trim(),
+          holland_dictionary_path: hollandDictionaryInput.value.trim(),
+          holland_sklad_output_dir: hollandSkladDirInput.value.trim(),
           ecuador_template_path: ecuadorTemplateInput.value.trim(),
           ecuador_output_dir: ecuadorOutputInput.value.trim(),
           delmir_lookback_days: parseDays(delmirLookbackInput, 14),

@@ -83,7 +83,8 @@ auto1_pipeline:
 holland_translate:
   enabled: true
   sklad_output_dir: "C:\\Инвойсы склад"
-  dictionary_path: Invoice/Словарь.xls
+  # Значения по умолчанию; в UI «Настройки» (Перевод) перекрывают.
+  dictionary_path: "C:\\Invoice\\Словарь.xls"
 
 # Загрузка «Транспорт трак» с del-mir.com по AWB из Auto_new.xls — отдельная кнопка.
 delmir:

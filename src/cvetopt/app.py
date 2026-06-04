@@ -22,6 +22,7 @@ from cvetopt.core.runtime_settings import (
     validate_biflorica_download_dir,
     validate_auto_new_workbook_path,
     validate_ecuador_paths,
+    validate_holland_translate_paths,
     validate_mail_output_dirs,
 )
 from cvetopt.core.settings import EnvSettings, SelectionOverride
@@ -146,6 +147,13 @@ async def api_runtime_settings_update(request: Request) -> JSONResponse:
         auto_err = validate_auto_new_workbook_path(env, settings.auto_new_workbook_path)
         if auto_err:
             return JSONResponse({"error": auto_err}, status_code=422)
+        holland_err = validate_holland_translate_paths(
+            env,
+            settings.holland_dictionary_path,
+            settings.holland_sklad_output_dir,
+        )
+        if holland_err:
+            return JSONResponse({"error": holland_err}, status_code=422)
         ecu_err = validate_ecuador_paths(
             env,
             settings.ecuador_template_path,

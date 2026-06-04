@@ -25,6 +25,8 @@ DEFAULT_MAIL_OUTPUT_DIR_SHORT = "data/downloads/mail/1"
 DEFAULT_MAIL_OUTPUT_DIR_LONG = "data/downloads/mail/2"
 DEFAULT_MAIL_FILENAME_SHORT_MAX_LEN = 35
 DEFAULT_AUTO_NEW_WORKBOOK = "Auto_new.xls"
+DEFAULT_HOLLAND_DICTIONARY = r"C:\Invoice\Словарь.xls"
+DEFAULT_HOLLAND_SKLAD_DIR = r"C:\Инвойсы склад"
 BIFLORICA_ARCHIVE_LEGACY_NAMES = frozenset({"архив", "archive"})
 BIFLORICA_DOWNLOAD_PREFIX = "BiFlorica-"
 # Скрипт: BiFlorica-<order_id>__<YYYY-MM-DD>.xlsx; старые без префикса тоже в архив.
@@ -62,6 +64,8 @@ class RuntimeSettings(BaseModel):
     mail_output_dir_long: str = Field(default=DEFAULT_MAIL_OUTPUT_DIR_LONG)
     mail_filename_short_max_len: int = Field(default=DEFAULT_MAIL_FILENAME_SHORT_MAX_LEN)
     auto_new_workbook_path: str = Field(default=DEFAULT_AUTO_NEW_WORKBOOK)
+    holland_dictionary_path: str = Field(default=DEFAULT_HOLLAND_DICTIONARY)
+    holland_sklad_output_dir: str = Field(default=DEFAULT_HOLLAND_SKLAD_DIR)
 
 
 def _settings_path(env: EnvSettings) -> Path:
@@ -84,6 +88,8 @@ def default_runtime_settings(env: EnvSettings) -> RuntimeSettings:
         mail_output_dir_long=yaml_cfg.mail.output_dir_long,
         mail_filename_short_max_len=yaml_cfg.mail.filename_short_max_len,
         auto_new_workbook_path=yaml_cfg.balance_auto.workbook_path,
+        holland_dictionary_path=yaml_cfg.holland_translate.dictionary_path,
+        holland_sklad_output_dir=yaml_cfg.holland_translate.sklad_output_dir,
     )
 
 
@@ -220,6 +226,63 @@ def validate_auto_new_workbook_path(env: EnvSettings, raw: str) -> str | None:
         )
     if path.stat().st_size < 1024:
         return f"Auto_new.xls: файл слишком маленький или пустой — {path}"
+    return None
+
+
+def resolve_holland_dictionary(env: EnvSettings, raw: str) -> Path:
+    """Путь к Словарь.xls (файл): абсолютный или относительно корня проекта."""
+    return _resolve_dir(env, raw, DEFAULT_HOLLAND_DICTIONARY)
+
+
+def resolve_holland_sklad_dir(env: EnvSettings, raw: str) -> Path:
+    return _resolve_dir(env, raw, DEFAULT_HOLLAND_SKLAD_DIR)
+
+
+def effective_holland_dictionary_raw(
+    runtime: RuntimeSettings,
+    *,
+    yaml_path: str = "",
+) -> str:
+    text = (runtime.holland_dictionary_path or "").strip()
+    if text:
+        return text
+    return (yaml_path or "").strip() or DEFAULT_HOLLAND_DICTIONARY
+
+
+def effective_holland_sklad_dir_raw(
+    runtime: RuntimeSettings,
+    *,
+    yaml_dir: str = "",
+) -> str:
+    text = (runtime.holland_sklad_output_dir or "").strip()
+    if text:
+        return text
+    return (yaml_dir or "").strip() or DEFAULT_HOLLAND_SKLAD_DIR
+
+
+def validate_holland_translate_paths(
+    env: EnvSettings,
+    raw_dictionary: str,
+    raw_sklad_dir: str,
+) -> str | None:
+    if _skip_local_path_check(raw_dictionary) and _skip_local_path_check(raw_sklad_dir):
+        return None
+    try:
+        dictionary = resolve_holland_dictionary(env, raw_dictionary)
+        sklad = resolve_holland_sklad_dir(env, raw_sklad_dir)
+    except (OSError, ValueError) as e:
+        return f"Перевод: некорректный путь — {e}"
+    if not _skip_local_path_check(raw_dictionary):
+        if not dictionary.is_file():
+            return (
+                f"Перевод: словарь не найден — {dictionary}. "
+                f"Укажите полный путь (например {DEFAULT_HOLLAND_DICTIONARY})."
+            )
+        if dictionary.stat().st_size < 32:
+            return f"Перевод: словарь пустой или повреждён — {dictionary}"
+    if not _skip_local_path_check(raw_sklad_dir):
+        if sklad.exists() and not sklad.is_dir():
+            return f"Перевод: папка склада — не каталог: {sklad}"
     return None
 
 
