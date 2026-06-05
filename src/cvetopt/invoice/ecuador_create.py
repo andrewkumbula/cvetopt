@@ -29,9 +29,46 @@ _CHECKBOX_BMPS = (
     "Green_Check_Off.bmp",
     "Green_Check_On.bmp",
 )
-_RESERVED_OLE_BUTTONS = frozenset({"cbTransaction", "cbRestart", "cbCreateTimeFile"})
-_ZEBRA_EVEN = 12379351
-_ZEBRA_ODD = 9944773
+_CV_SYNC_MACRO = "cv_SyncRowCheckboxes"
+_CV_SYNC_VBA = """
+Public Sub cv_SyncRowCheckboxes(aFirst As Long, aLast As Long)
+    Dim aI As Long
+    Dim aCommandButton As MSForms.CommandButton
+    Dim aSheet As Worksheet
+    Set aSheet = ThisWorkbook.Sheets(1)
+    Application.ScreenUpdating = False
+    Call DelCommandButton(aSheet.Name)
+    With aSheet
+        .Columns("A:A").ColumnWidth = 2.2
+        .Columns("B:B").ColumnWidth = 2.2
+        For aI = aFirst To aLast
+            Set aCommandButton = .OLEObjects.Add(ClassType:="Forms.CommandButton.1").Object
+            With aCommandButton
+                .Left = aSheet.Cells(aI, 1).Left
+                .Top = aSheet.Cells(aI, 1).Top
+                .Width = aSheet.Cells(aI, 1).Width
+                .Height = aSheet.Cells(aI, 1).Height
+                .Picture = LoadPicture(ThisWorkbook.Path & "\\" & "Red_Check_Off.bmp")
+                .Caption = "1 " & Trim(Str(aI)) & " 0"
+            End With
+            Set aCommandButton = .OLEObjects.Add(ClassType:="Forms.CommandButton.1").Object
+            With aCommandButton
+                .Left = aSheet.Cells(aI, 2).Left
+                .Top = aSheet.Cells(aI, 2).Top
+                .Width = aSheet.Cells(aI, 2).Width
+                .Height = aSheet.Cells(aI, 2).Height
+                .Picture = LoadPicture(ThisWorkbook.Path & "\\" & "Green_Check_Off.bmp")
+                .Caption = "2 " & Trim(Str(aI)) & " 0"
+            End With
+            If (aI Mod 2) = 0 Then
+                .Range("D" & Trim(Str(aI)) & ":AB" & Trim(Str(aI))).Interior.Color = 12379351
+            Else
+                .Range("D" & Trim(Str(aI)) & ":AB" & Trim(Str(aI))).Interior.Color = 9944773
+            End If
+        Next aI
+    End With
+End Sub
+"""
 
 
 def ecuador_output_basename(when: datetime | None = None) -> str:
@@ -76,30 +113,25 @@ def _copy_checkbox_assets(template_dir: Path, target_dir: Path) -> None:
             shutil.copy2(src, target_dir / name)
 
 
-def _delete_row_command_buttons(sheet: object) -> None:
-    oles = sheet.api.OLEObjects()
-    for i in range(int(oles.Count), 0, -1):
-        ole = oles.Item(i)
-        if str(ole.Name) in _RESERVED_OLE_BUTTONS:
-            continue
-        try:
-            ole.Delete()
-        except Exception:
-            pass
+def _ensure_cv_sync_macro(wb: object) -> None:
+    """Public-макрос в Module1 (как SetCommandButton, без вставки колонки A)."""
+    mod = wb.api.VBProject.VBComponents("Module1").CodeModule
+    line_count = int(mod.CountOfLines)
+    existing = mod.Lines(1, line_count) if line_count else ""
+    if f"Sub {_CV_SYNC_MACRO}" in existing:
+        return
+    mod.InsertLines(line_count + 1, _CV_SYNC_VBA)
 
 
 def _sync_row_checkboxes(
     wb: object,
-    sheet: object,
     *,
     first_row: int,
     last_row: int,
-    assets_dir: Path,
     log: LogFn | None = None,
 ) -> None:
     """
-    Красные/зелёные кнопки как Module1.SetCommandButton, но без вставки колонки A
-    (шаблон уже в формате «Форматирование»).
+    Чекбоксы через VBA (русская локаль Excel ломает COM OLEObjects.Add/LoadPicture).
     """
     if last_row < first_row:
         return
@@ -108,35 +140,35 @@ def _sync_row_checkboxes(
         if log is not None:
             log(msg)
 
-    red_img = str((assets_dir / "Red_Check_Off.bmp").resolve())
-    green_img = str((assets_dir / "Green_Check_Off.bmp").resolve())
-    if not Path(red_img).is_file() or not Path(green_img).is_file():
-        raise FileNotFoundError(
-            f"Нет bmp для чекбоксов в {assets_dir} (Red_Check_Off.bmp, Green_Check_Off.bmp)."
-        )
-
-    app_api = wb.app.api
-    sheet.api.Columns("A:A").ColumnWidth = 2.2
-    sheet.api.Columns("B:B").ColumnWidth = 2.2
-    _delete_row_command_buttons(sheet)
     _lg(f"Эквадор: чекбоксы для строк {first_row}–{last_row}…")
+    try:
+        _ensure_cv_sync_macro(wb)
+    except Exception as e:
+        raise RuntimeError(
+            "Не удалось добавить макрос чекбоксов в Module1. Включите в Excel: "
+            "Файл → Параметры → Центр управления безопасностью → "
+            "«Доверять доступ к объектной модели VBA-проекта». "
+            f"({e})"
+        ) from e
 
-    for row in range(first_row, last_row + 1):
-        for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
-            cell = sheet.api.Cells(row, col)
-            ole = sheet.api.OLEObjects().Add(
-                ClassType="Forms.CommandButton.1",
-                Left=float(cell.Left),
-                Top=float(cell.Top),
-                Width=float(cell.Width),
-                Height=float(cell.Height),
-            )
-            btn = ole.Object
-            btn.Picture = app_api.LoadPicture(img)
-            btn.Caption = f"{prefix} {row} 0"
+    app = wb.app.api
+    wb_name = str(wb.name)
+    errors: list[str] = []
+    for spec in (
+        f"'{wb_name}'!{_CV_SYNC_MACRO}",
+        f"Module1.{_CV_SYNC_MACRO}",
+        _CV_SYNC_MACRO,
+    ):
+        try:
+            app.Run(spec, first_row, last_row)
+            return
+        except Exception as e:
+            errors.append(f"{spec}: {e}")
 
-        color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
-        sheet.api.Range(f"D{row}:AB{row}").Interior.Color = color
+    tail = "; ".join(errors[-3:])
+    raise RuntimeError(
+        f"Не удалось вызвать {_CV_SYNC_MACRO} для чекбоксов. ({tail})"
+    )
 
 
 def _apply_create_file_ui(workbook: object, output_name: str) -> None:
@@ -249,10 +281,8 @@ def create_ecuador_file_from_biflorica(
 
         _sync_row_checkboxes(
             wb,
-            data_sheet,
             first_row=_DATA_FIRST_ROW,
             last_row=last_row,
-            assets_dir=tmp_copy.parent,
             log=log,
         )
 
