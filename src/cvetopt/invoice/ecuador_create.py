@@ -23,6 +23,15 @@ _DATA_FIRST_ROW = 7
 _CLEAR_LAST_ROW = 500
 # msoAutomationSecurityForceDisable — без диалога макросов при открытии .xlsm
 _MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
+_CHECKBOX_BMPS = (
+    "Red_Check_Off.bmp",
+    "Red_Check_On.bmp",
+    "Green_Check_Off.bmp",
+    "Green_Check_On.bmp",
+)
+_RESERVED_OLE_BUTTONS = frozenset({"cbTransaction", "cbRestart", "cbCreateTimeFile"})
+_ZEBRA_EVEN = 12379351
+_ZEBRA_ODD = 9944773
 
 
 def ecuador_output_basename(when: datetime | None = None) -> str:
@@ -58,6 +67,76 @@ def _write_deal_row(sheet: object, row: int, deal: EcuadorDealRow) -> None:
     for col_letter, value in deal.qty_by_length_col.items():
         if value:
             sheet.range(f"{col_letter}{row}").value = value
+
+
+def _copy_checkbox_assets(template_dir: Path, target_dir: Path) -> None:
+    for name in _CHECKBOX_BMPS:
+        src = template_dir / name
+        if src.is_file():
+            shutil.copy2(src, target_dir / name)
+
+
+def _delete_row_command_buttons(sheet: object) -> None:
+    oles = sheet.api.OLEObjects()
+    for i in range(int(oles.Count), 0, -1):
+        ole = oles.Item(i)
+        if str(ole.Name) in _RESERVED_OLE_BUTTONS:
+            continue
+        try:
+            ole.Delete()
+        except Exception:
+            pass
+
+
+def _sync_row_checkboxes(
+    wb: object,
+    sheet: object,
+    *,
+    first_row: int,
+    last_row: int,
+    assets_dir: Path,
+    log: LogFn | None = None,
+) -> None:
+    """
+    Красные/зелёные кнопки как Module1.SetCommandButton, но без вставки колонки A
+    (шаблон уже в формате «Форматирование»).
+    """
+    if last_row < first_row:
+        return
+
+    def _lg(msg: str) -> None:
+        if log is not None:
+            log(msg)
+
+    red_img = str((assets_dir / "Red_Check_Off.bmp").resolve())
+    green_img = str((assets_dir / "Green_Check_Off.bmp").resolve())
+    if not Path(red_img).is_file() or not Path(green_img).is_file():
+        raise FileNotFoundError(
+            f"Нет bmp для чекбоксов в {assets_dir} (Red_Check_Off.bmp, Green_Check_Off.bmp)."
+        )
+
+    app_api = wb.app.api
+    sheet.api.Columns("A:A").ColumnWidth = 2.2
+    sheet.api.Columns("B:B").ColumnWidth = 2.2
+    _delete_row_command_buttons(sheet)
+    _lg(f"Эквадор: чекбоксы для строк {first_row}–{last_row}…")
+
+    for row in range(first_row, last_row + 1):
+        for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
+            cell = sheet.api.Cells(row, col)
+            ole = sheet.api.OLEObjects().Add(
+                ClassType="Forms.CommandButton.1",
+                Left=float(cell.Left),
+                Top=float(cell.Top),
+                Width=float(cell.Width),
+                Height=float(cell.Height),
+            )
+            btn = ole.Object
+            btn.Picture = app_api.LoadPicture(img)
+            btn.Caption = f"{prefix} {row} 0"
+
+        color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
+        sheet.api.Range(f"D{row}:AB{row}").Interior.Color = color
 
 
 def _apply_create_file_ui(workbook: object, output_name: str) -> None:
@@ -147,6 +226,7 @@ def create_ecuador_file_from_biflorica(
         with tempfile.NamedTemporaryFile(suffix=".xlsm", delete=False) as tmp:
             tmp_copy = Path(tmp.name)
         shutil.copy2(template, tmp_copy)
+        _copy_checkbox_assets(template.parent, tmp_copy.parent)
 
         _lg("Эквадор: открываю шаблон (без запроса макросов)…")
         wb = app.books.open(
@@ -160,15 +240,26 @@ def create_ecuador_file_from_biflorica(
 
         _lg("Эквадор: заполняю строки…")
         data_sheet.range(f"D{_DATA_FIRST_ROW}:AB{_CLEAR_LAST_ROW}").clear_contents()
+        last_row = _DATA_FIRST_ROW + len(deals) - 1
         for idx, deal in enumerate(deals):
             _write_deal_row(data_sheet, _DATA_FIRST_ROW + idx, deal)
 
         path_sheet.range("A1").value = str(biflorica_path)
         path_sheet.range("B1").value = biflorica_path.name
 
+        _sync_row_checkboxes(
+            wb,
+            data_sheet,
+            first_row=_DATA_FIRST_ROW,
+            last_row=last_row,
+            assets_dir=tmp_copy.parent,
+            log=log,
+        )
+
         _lg(f"Эквадор: сохраняю → {out_path}")
         _apply_create_file_ui(wb, out_name)
         wb.api.SaveAs(str(out_path))
+        _copy_checkbox_assets(template.parent, out_path.parent)
         wb.save()
         wb.close()
         wb = None
