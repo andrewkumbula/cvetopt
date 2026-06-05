@@ -177,6 +177,14 @@ class HollandTranslateConfig(BaseModel):
     dictionary_path: str = r"C:\Invoice\Словарь.xls"
 
 
+class EcuadorCreateConfig(BaseModel):
+    """Прием товара Эквадор-4.xlsm: отчёт Biflorica → файл «Эквадор …xlsm» (Windows + Excel)."""
+
+    enabled: bool = True
+    # Пока тестируем отдельной кнопкой; True — создавать сразу после каждого скачивания Biflorica.
+    auto_after_biflorica: bool = False
+
+
 class DelmirSelectors(BaseModel):
     """Селекторы del-mir.com — сверены с сохранённой страницей «Мой баланс»."""
 
@@ -248,6 +256,7 @@ class AppYamlConfig(BaseModel):
     balance_auto: BalanceAutoConfig = Field(default_factory=BalanceAutoConfig)
     auto1_pipeline: Auto1PipelineConfig = Field(default_factory=Auto1PipelineConfig)
     holland_translate: HollandTranslateConfig = Field(default_factory=HollandTranslateConfig)
+    ecuador_create: EcuadorCreateConfig = Field(default_factory=EcuadorCreateConfig)
     delmir: DelmirConfig = Field(default_factory=DelmirConfig)
     mail: MailConfig = Field(default_factory=MailConfig)
 

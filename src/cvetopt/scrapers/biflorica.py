@@ -557,7 +557,10 @@ async def run_biflorica_job(
                 downloaded_ids.add(order.order_id)
                 await job_manager.add_downloaded(job_id, str(dest))
                 await lg(f"Сохранено: {dest}")
-                if sys.platform != "win32":
+                ecuador_auto = env.yaml_config().ecuador_create.auto_after_biflorica
+                if not ecuador_auto:
+                    pass
+                elif sys.platform != "win32":
                     await lg("Эквадор: пропуск (нужен Windows + Excel)")
                 else:
                     await raise_if_cancelled(job_id)

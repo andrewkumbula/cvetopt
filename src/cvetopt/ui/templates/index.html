@@ -167,6 +167,16 @@
     </div>
 
     <div class="row">
+      <form method="post" action="/run/ecuador-create" data-job-form id="ecuador-create-form" class="job-form">
+        <button type="submit" data-job-btn>Эквадор: создать файл (тест)</button>
+      </form>
+      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
+        Windows + Excel. Берёт последний <code>BiFlorica-*.xlsx</code> из папки скачивания,
+        шаблон и папку выгрузки — в <strong>Настройки</strong>. После заполнения — макрос «Создать файл».
+      </p>
+    </div>
+
+    <div class="row">
       <form method="post" action="/run/holland-translate" data-job-form id="holland-translate-form" class="job-form">
         <button type="submit" data-job-btn>Перевод</button>
       </form>
@@ -380,8 +390,8 @@
       в архив уходят только старые отчёты Biflorica без записи в реестре
       (файлы с префиксом <code>BiFlorica-</code> в корне папки),
       уже скачанные заказы в папке остаются.
-      На Windows после каждого скачанного отчёта создаётся файл
-      <code>Эквадор 03.06.26 15.57.xlsm</code> в папке выгрузки (только сервер с Excel).
+      Эквадор: кнопка <strong>«Эквадор: создать файл (тест)»</strong> на вкладке Запуск
+      (автоматически после Biflorica сейчас выключено — <code>ecuador_create.auto_after_biflorica: false</code>).
     </p>
   </section>
 

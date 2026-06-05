@@ -28,6 +28,7 @@ from cvetopt.core.runtime_settings import (
 from cvetopt.core.settings import EnvSettings, SelectionOverride
 from cvetopt.core.testing_reset import reset_testing_state
 from cvetopt.scrapers.auto1_pipeline import run_auto1_pipeline_job
+from cvetopt.scrapers.ecuador_create_job import run_ecuador_create_job
 from cvetopt.scrapers.holland_translate import run_holland_translate_job
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
@@ -340,6 +341,18 @@ async def run_auto1_pipeline_route(request: Request):
     env = EnvSettings()
     job = job_manager.create_job("auto1_pipeline")
     job_manager.schedule(job.id, run_auto1_pipeline_job(job.id, env))
+    return RedirectResponse(url=f"/job/{job.id}", status_code=303)
+
+
+@app.post("/run/ecuador-create")
+async def run_ecuador_create_route(request: Request):
+    """BiFlorica xlsx → «Эквадор …xlsm» через шаблон и макрос «Создать файл» (Windows + Excel)."""
+    busy = _reject_if_busy()
+    if busy is not None:
+        return busy
+    env = EnvSettings()
+    job = job_manager.create_job("ecuador_create")
+    job_manager.schedule(job.id, run_ecuador_create_job(job.id, env))
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 

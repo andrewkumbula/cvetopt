@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from cvetopt.core.runtime_settings import (
+    order_id_from_biflorica_report,
     resolve_ecuador_output_dir,
     resolve_ecuador_template,
 )
@@ -32,6 +33,30 @@ _CHECKBOX_BMPS = (
     "Green_Check_Off.bmp",
     "Green_Check_On.bmp",
 )
+_CV_CREATE_MACRO = "cv_Run_CreateFile"
+_CV_CREATE_VBA = """
+Public Sub cv_Run_CreateFile(Optional aSaveDir As String = "")
+    Dim aName As String
+    Dim aPath As String
+    Dim saveDir As String
+    saveDir = aSaveDir
+    If saveDir = "" Then saveDir = aPathToWrite
+    aName = "Эквадор " & Format(Now(), "d/m/yy hh.nn") & ".xlsm"
+    aPath = saveDir & "\\" & aName
+    ThisWorkbook.Save
+    ThisWorkbook.SaveAs aPath
+    With Workbooks(aName).Sheets(1)
+        .Name = "Форматирование"
+        .cbCreateTimeFile.Visible = False
+        .cbTransaction.Visible = True
+    End With
+    With Workbooks(aName).Sheets(2)
+        .Cells(2, 1).Value = "False"
+        .Range("B3").Value = aPath
+    End With
+    Workbooks(aName).Save
+End Sub
+"""
 _CV_SYNC_MACRO = "cv_SyncRowCheckboxes"
 _CV_SYNC_VBA = """
 Public Sub cv_SyncRowCheckboxes(aFirst As Long, aLast As Long)
@@ -72,6 +97,22 @@ Public Sub cv_SyncRowCheckboxes(aFirst As Long, aLast As Long)
     End With
 End Sub
 """
+
+
+def find_latest_biflorica_report(download_dir: Path) -> Path | None:
+    """Самый свежий BiFlorica-<id>__<дата>.xlsx в папке скачивания."""
+    if not download_dir.is_dir():
+        return None
+    candidates = [
+        entry
+        for entry in download_dir.iterdir()
+        if entry.is_file()
+        and entry.suffix.lower() == ".xlsx"
+        and order_id_from_biflorica_report(entry) is not None
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def ecuador_output_basename(when: datetime | None = None) -> str:
@@ -231,6 +272,78 @@ def _sync_row_checkboxes(
         ) from com_err
 
 
+def _ensure_cv_create_macro(wb: object, sheet_codename: str) -> None:
+    mod = wb.api.VBProject.VBComponents(sheet_codename).CodeModule
+    line_count = int(mod.CountOfLines)
+    existing = mod.Lines(1, line_count) if line_count else ""
+    if f"Sub {_CV_CREATE_MACRO}" in existing:
+        return
+    mod.InsertLines(line_count + 1, _CV_CREATE_VBA)
+
+
+def _invoke_create_file_macro(
+    wb: object,
+    path_sheet: object,
+    *,
+    output_dir: Path,
+    sheet_codename: str,
+    log: LogFn | None = None,
+) -> Path:
+    """Кнопка «Создать файл» — cbCreateTimeFile_Click через public-обёртку."""
+    def _lg(msg: str) -> None:
+        if log is not None:
+            log(msg)
+
+    _lg("Эквадор: «Создать файл» (макрос)…")
+    try:
+        _ensure_cv_create_macro(wb, sheet_codename)
+    except Exception as e:
+        raise RuntimeError(
+            "Не удалось добавить макрос «Создать файл». Включите в Excel "
+            "«Доверять доступ к объектной модели VBA-проекта». "
+            f"({e})"
+        ) from e
+
+    save_dir = str(output_dir.resolve())
+    app = wb.app.api
+    wb_name = str(wb.name)
+    errors: list[str] = []
+    for spec in (
+        f"'{wb_name}'!{_CV_CREATE_MACRO}",
+        f"'{sheet_codename}'.{_CV_CREATE_MACRO}",
+        _CV_CREATE_MACRO,
+    ):
+        try:
+            app.Run(spec, save_dir)
+            saved_raw = path_sheet.range("B3").value
+            if saved_raw:
+                out = Path(str(saved_raw)).resolve()
+                if out.is_file():
+                    _lg(f"Эквадор: сохранено макросом → {out}")
+                    return out
+            newest = _newest_ecuador_xlsm(output_dir)
+            if newest is not None:
+                _lg(f"Эквадор: сохранено макросом → {newest}")
+                return newest
+            raise RuntimeError("макрос завершился, но файл не найден")
+        except Exception as e:
+            errors.append(f"{spec}: {e}")
+
+    tail = "; ".join(errors[-3:])
+    raise RuntimeError(f"Не удалось вызвать «Создать файл». ({tail})")
+
+
+def _newest_ecuador_xlsm(output_dir: Path) -> Path | None:
+    items = [
+        path
+        for path in output_dir.glob("Эквадор*.xlsm")
+        if path.is_file()
+    ]
+    if not items:
+        return None
+    return max(items, key=lambda path: path.stat().st_mtime)
+
+
 def _apply_create_file_ui(workbook: object, output_name: str) -> None:
     """Аналог cbCreateTimeFile: лист «Форматирование», флаги на Path."""
     sheet = workbook.sheets[_SHEET_DATA]
@@ -256,10 +369,11 @@ def create_ecuador_file_from_biflorica(
     *,
     template_path: Path | None = None,
     output_dir: Path | None = None,
+    use_create_file_macro: bool = True,
     log: LogFn | None = None,
 ) -> Path:
     """
-    Вариант B: преобразование в Python, запись в шаблон .xlsm, SaveAs как «Создать файл».
+    Преобразование в Python, запись в шаблон .xlsm, затем «Создать файл» (VBA) или SaveAs.
     Только Windows + установленный Excel (xlwings).
     """
     if sys.platform != "win32":
@@ -291,8 +405,6 @@ def create_ecuador_file_from_biflorica(
         raise ValueError(f"В отчёте нет строк сделок: {biflorica_path.name}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_name = ecuador_output_basename()
-    out_path = (out_dir / out_name).resolve()
 
     _lg(f"Эквадор: сделок {len(deals)}, шаблон {template.name}")
 
@@ -329,6 +441,8 @@ def create_ecuador_file_from_biflorica(
         )
         data_sheet = wb.sheets[_SHEET_DATA]
         path_sheet = wb.sheets[_SHEET_PATH]
+        sheet_codename = str(data_sheet.api.CodeName)
+        path_sheet.range("A2").value = "False"
 
         _lg("Эквадор: заполняю строки…")
         data_sheet.range(f"D{_DATA_FIRST_ROW}:AB{_CLEAR_LAST_ROW}").clear_contents()
@@ -348,12 +462,29 @@ def create_ecuador_file_from_biflorica(
             log=log,
         )
 
-        _lg(f"Эквадор: сохраняю → {out_path}")
-        _apply_create_file_ui(wb, out_name)
-        wb.api.SaveAs(str(out_path))
-        _copy_checkbox_assets(template.parent, out_path.parent)
-        wb.save()
-        wb.close()
+        if use_create_file_macro:
+            out_path = _invoke_create_file_macro(
+                wb,
+                path_sheet,
+                output_dir=out_dir,
+                sheet_codename=sheet_codename,
+                log=log,
+            )
+            _copy_checkbox_assets(template.parent, out_path.parent)
+        else:
+            out_name = ecuador_output_basename()
+            out_path = (out_dir / out_name).resolve()
+            _lg(f"Эквадор: сохраняю → {out_path}")
+            _apply_create_file_ui(wb, out_name)
+            wb.api.SaveAs(str(out_path))
+            _copy_checkbox_assets(template.parent, out_path.parent)
+            wb.save()
+
+        for book in list(app.books):
+            try:
+                book.close()
+            except Exception:
+                pass
         wb = None
         _lg(f"Эквадор: файл создан → {out_path}")
         return out_path

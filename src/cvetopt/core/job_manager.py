@@ -90,6 +90,9 @@ def _is_ui_log_line(line: str) -> bool:
         "словарь",
         "description",
         "голландия",
+        "эквадор",
+        "создать файл",
+        "biflorica-",
     )
     if any(marker in low for marker in key_markers):
         return True

@@ -79,6 +79,11 @@ auto1_pipeline:
   backup_before_run: true
   backup_suffix: ".bak"
 
+# Эквадор: BiFlorica xlsx → «Эквадор …xlsm» (отдельная кнопка; пути — в UI «Настройки»).
+ecuador_create:
+  enabled: true
+  auto_after_biflorica: false
+
 # Перевод Description в выгрузке Голландия_1_*.xlsx (словарь: B — англ., C — перевод).
 holland_translate:
   enabled: true
