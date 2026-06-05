@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import tempfile
+import zipfile
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -22,8 +24,10 @@ _SHEET_DATA = 0
 _SHEET_PATH = 1
 _DATA_FIRST_ROW = 7
 _CLEAR_LAST_ROW = 500
-# msoAutomationSecurityLow — иначе Application.Run блокируется («макросы отключены»).
+# Low — для Application.Run; ForceDisable — при открытии .xlsm (иначе Workbook_Open → диалог).
 _MSO_AUTOMATION_SECURITY_LOW = 1
+_MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
+_PATH_SHEET_AUTO_OPEN_CELL = '<c r="A2" t="inlineStr"><is><t>False</t></is></c>'
 _RESERVED_OLE_BUTTONS = frozenset({"cbTransaction", "cbRestart", "cbCreateTimeFile"})
 _ZEBRA_EVEN = 12379351
 _ZEBRA_ODD = 9944773
@@ -125,16 +129,82 @@ def ecuador_output_basename(when: datetime | None = None) -> str:
     return f"Эквадор {stamp}.xlsm"
 
 
-def _configure_excel_app(app: object) -> None:
+def _configure_excel_app_base(app: object) -> None:
     app.display_alerts = False
     app.screen_updating = False
     api = app.api
     api.DisplayAlerts = False
+
+
+def _configure_excel_app_for_open(app: object) -> None:
+    """Без макросов при открытии — Path!A2=True иначе вызывает sOpenFile (диалог файла)."""
+    _configure_excel_app_base(app)
+    api = app.api
+    api.EnableEvents = False
+    try:
+        api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_FORCE_DISABLE
+    except Exception:
+        pass
+
+
+def _configure_excel_app_for_macros(app: object) -> None:
+    _configure_excel_app_base(app)
+    api = app.api
     api.EnableEvents = True
     try:
         api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
     except Exception:
         pass
+
+
+def _patch_path_auto_open_off(xlsm_path: Path) -> None:
+    """
+    Path!A2 в шаблоне = True → Workbook_Open сразу открывает диалог «Выбрать файл».
+    Меняем на False в XML до открытия Excel.
+    """
+    sheet2 = "xl/worksheets/sheet2.xml"
+    with zipfile.ZipFile(xlsm_path, "r") as zin:
+        raw = zin.read(sheet2).decode("utf-8")
+        patched = re.sub(
+            r"<c r=\"A2\"(?:[^>]*)>(?:.*?</c>|/>)",
+            _PATH_SHEET_AUTO_OPEN_CELL,
+            raw,
+            count=1,
+            flags=re.DOTALL,
+        )
+        if patched == raw:
+            raise RuntimeError("Эквадор: не удалось выставить Path!A2=False в копии шаблона")
+        tmp_out = xlsm_path.with_name(xlsm_path.name + ".a2patch")
+        with zipfile.ZipFile(tmp_out, "w") as zout:
+            for item in zin.infolist():
+                payload = patched.encode("utf-8") if item.filename == sheet2 else zin.read(item.filename)
+                zout.writestr(item, payload, compress_type=item.compress_type)
+    tmp_out.replace(xlsm_path)
+
+
+def _open_workbook_quiet(app: object, path: Path) -> object:
+    """Открытие без Notify и без срабатывания Workbook_Open."""
+    api = app.api
+    wb_api = api.Workbooks.Open(
+        str(path),
+        0,
+        False,
+        None,
+        None,
+        None,
+        True,
+        None,
+        None,
+        None,
+        None,
+        False,
+        None,
+        False,
+    )
+    for book in app.books:
+        if str(book.fullname).lower() == str(path.resolve()).lower():
+            return book
+    return app.books[-1]
 
 
 def _write_deal_row(sheet: object, row: int, deal: EcuadorDealRow) -> None:
@@ -425,20 +495,18 @@ def create_ecuador_file_from_biflorica(
     tmp_copy: Path | None = None
     try:
         app = xw.App(visible=visible, add_book=False)
-        _configure_excel_app(app)
+        _configure_excel_app_for_open(app)
 
         with tempfile.NamedTemporaryFile(suffix=".xlsm", delete=False) as tmp:
             tmp_copy = Path(tmp.name)
         shutil.copy2(template, tmp_copy)
+        _patch_path_auto_open_off(tmp_copy)
         _copy_checkbox_assets(template.parent, tmp_copy.parent)
 
-        _lg("Эквадор: открываю шаблон (без запроса макросов)…")
-        wb = app.books.open(
-            str(tmp_copy),
-            update_links=0,
-            read_only=False,
-            ignore_read_only_recommended=True,
-        )
+        _lg("Эквадор: открываю шаблон (Path!A2=False, макросы при открытии выкл.)…")
+        wb = _open_workbook_quiet(app, tmp_copy)
+        _lg(f"Эквадор: шаблон открыт — {wb.name}")
+
         data_sheet = wb.sheets[_SHEET_DATA]
         path_sheet = wb.sheets[_SHEET_PATH]
         sheet_codename = str(data_sheet.api.CodeName)
@@ -453,6 +521,7 @@ def create_ecuador_file_from_biflorica(
         path_sheet.range("A1").value = str(biflorica_path)
         path_sheet.range("B1").value = biflorica_path.name
 
+        _configure_excel_app_for_macros(app)
         _sync_row_checkboxes(
             wb,
             data_sheet,
