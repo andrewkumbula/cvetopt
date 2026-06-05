@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 import sys
 from collections.abc import Callable
 from datetime import date
@@ -177,10 +176,6 @@ def translate_holland_export(
     _desc_col, trans_col, updates, translated, missing, total = _build_translation_plan(
         export_path, dictionary, log=_lg
     )
-
-    bak = export_path.with_name(export_path.name + ".pre_translate.bak")
-    shutil.copy2(export_path, bak)
-    _lg(f"Резервная копия перед переводом: {bak.name}")
 
     if sys.platform == "win32":
         try:
