@@ -21,6 +21,11 @@ def _escape_xml_text(text: str) -> str:
     )
 
 
+def _inline_str_cell(ref: str, style: bytes, text: str) -> bytes:
+    inner = _inline_str_inner(text)
+    return _open_tag_for(ref, style, inline=True) + inner + b"</c>"
+
+
 def _inline_str_inner(text: str) -> bytes:
     t = _escape_xml_text(text)
     if text != text.strip() or " " in text:
@@ -76,14 +81,6 @@ def _first_sheet_path(names: list[str]) -> str | None:
     )
 
 
-def _cell_pattern(ref: str) -> re.Pattern[bytes]:
-    ref_b = ref.encode("ascii")
-    return re.compile(
-        rb'(<c r="' + re.escape(ref_b) + rb'"[^>]*>)(.*?)(</c>)',
-        re.DOTALL,
-    )
-
-
 def _row_pattern(row_num: int) -> re.Pattern[bytes]:
     return re.compile(
         rb'(<row r="' + str(row_num).encode() + rb'"[^>]*>)(.*?)(</row>)',
@@ -91,19 +88,39 @@ def _row_pattern(row_num: int) -> re.Pattern[bytes]:
     )
 
 
+def _locate_cell(sheet: bytes, ref: str) -> tuple[int, int, bytes] | None:
+    """Возвращает (start, end, attrs) для <c r=\"ref\" …> или самозакрывающейся ячейки."""
+    ref_esc = re.escape(ref.encode("ascii"))
+    self_pat = re.compile(rb"<c r=\"" + ref_esc + rb"\"([^>/]*)/>")
+    m = self_pat.search(sheet)
+    if m:
+        return m.start(), m.end(), m.group(1)
+    full_pat = re.compile(
+        rb"<c r=\"" + ref_esc + rb"\"([^>]*)>(.*?)</c>",
+        re.DOTALL,
+    )
+    m = full_pat.search(sheet)
+    if m:
+        return m.start(), m.end(), m.group(1)
+    return None
+
+
+def _style_attr(attrs: bytes) -> bytes:
+    sm = re.search(rb'\ss="(\d+)"', attrs)
+    return sm.group(0) if sm else b""
+
+
 def _style_from_row(sheet: bytes, row_num: int, col_letter: str) -> bytes:
-    """Берёт s=\"…\" с ячейки слева от целевой колонки в той же строке."""
     row_m = _row_pattern(row_num).search(sheet)
     if not row_m:
         return b""
     row_xml = row_m.group(0)
     target_idx = _col_letter_to_index(col_letter)
     style = b""
-    for cell_m in re.finditer(rb'<c r="([A-Z]+)(\d+)"([^>]*)>', row_xml):
+    for cell_m in re.finditer(rb'<c r="([A-Z]+)(\d+)"([^>/]*)(?:/>|>)', row_xml):
         col = cell_m.group(1).decode()
         if _col_letter_to_index(col) < target_idx:
-            attrs = cell_m.group(3)
-            sm = re.search(rb'\ss="(\d+)"', attrs)
+            sm = re.search(rb'\ss="(\d+)"', cell_m.group(3))
             if sm:
                 style = sm.group(0)
     return style
@@ -118,34 +135,18 @@ def _open_tag_for(ref: str, style: bytes, *, inline: bool) -> bytes:
     return base + b">"
 
 
-def _patch_one_cell(sheet: bytes, ref: str, value: str | None) -> bytes:
-    m = _COL_REF_RE.match(ref)
-    if not m:
-        return sheet
-    col_l, row_n = m.group(1), int(m.group(2))
-    pat = _cell_pattern(ref)
-    style = _style_from_row(sheet, row_n, col_l)
+def _empty_self_close(ref: str, style: bytes) -> bytes:
+    base = b'<c r="' + ref.encode("ascii") + b'"'
+    if style:
+        base += style
+    return base + b" />"
 
-    existing = pat.search(sheet)
-    if value is None or not str(value).strip():
-        if not existing:
-            return sheet
-        open_tag = existing.group(1)
-        cleared = re.sub(rb'\s+t="[^"]*"', b"", open_tag) + b">"
-        return pat.sub(cleared + b"</c>", sheet, count=1)
 
-    inner = _inline_str_inner(str(value))
-    if existing:
-        open_tag = existing.group(1)
-        if b't="inlineStr"' not in open_tag:
-            open_tag = open_tag[:-1] + b' t="inlineStr">'
-        return pat.sub(open_tag + inner + b"</c>", sheet, count=1)
-
-    row_pat = _row_pattern(row_n)
+def _insert_cell_in_row(sheet: bytes, row_num: int, col_l: str, new_cell: bytes) -> bytes:
+    row_pat = _row_pattern(row_num)
     row_m = row_pat.search(sheet)
     if not row_m:
         return sheet
-    new_cell = _open_tag_for(ref, style, inline=True) + inner + b"</c>"
     row_open, row_body, row_close = row_m.group(1), row_m.group(2), row_m.group(3)
     new_idx = _col_letter_to_index(col_l)
     insert_at = len(row_body)
@@ -157,6 +158,58 @@ def _patch_one_cell(sheet: bytes, ref: str, value: str | None) -> bytes:
     new_body = row_body[:insert_at] + new_cell + row_body[insert_at:]
     new_row = row_open + new_body + row_close
     return sheet[: row_m.start()] + new_row + sheet[row_m.end() :]
+
+
+def _patch_one_cell(sheet: bytes, ref: str, value: str | None) -> bytes:
+    m = _COL_REF_RE.match(ref)
+    if not m:
+        return sheet
+    col_l, row_n = m.group(1), int(m.group(2))
+    located = _locate_cell(sheet, ref)
+    style = _style_from_row(sheet, row_n, col_l)
+    if located is not None:
+        start, end, attrs = located
+        style = _style_attr(attrs) or style
+    else:
+        start = end = -1
+
+    if value is None or not str(value).strip():
+        if located is None:
+            return sheet
+        return sheet[:start] + _empty_self_close(ref, style) + sheet[end:]
+
+    new_cell = _inline_str_cell(ref, style, str(value))
+    if located is not None:
+        return sheet[:start] + new_cell + sheet[end:]
+    return _insert_cell_in_row(sheet, row_n, col_l, new_cell)
+
+
+def _repack_xlsx(zf: zipfile.ZipFile, sheet_name: str, new_sheet_xml: bytes) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zout:
+        for name in zf.namelist():
+            data = new_sheet_xml if name == sheet_name else zf.read(name)
+            info = zf.getinfo(name)
+            new_info = zipfile.ZipInfo(filename=name, date_time=info.date_time)
+            new_info.compress_type = info.compress_type
+            new_info.external_attr = info.external_attr
+            new_info.flag_bits = info.flag_bits
+            zout.writestr(new_info, data, compress_type=info.compress_type)
+    return buffer.getvalue()
+
+
+def _validate_sheet_xml(sheet: bytes) -> None:
+    """Проверка: в каждой строке не больше одной ячейки с тем же r."""
+    for row_m in re.finditer(rb"<row r=\"(\d+)\"[^>]*>(.*?)</row>", sheet, re.DOTALL):
+        seen: set[bytes] = set()
+        row_body = row_m.group(2)
+        for cell_m in re.finditer(rb'<c r="([^"]+)"', row_body):
+            ref = cell_m.group(1)
+            if ref in seen:
+                raise RuntimeError(
+                    f"Повреждённый XML: дубликат ячейки {ref.decode()} в строке {row_m.group(1).decode()}."
+                )
+            seen.add(ref)
 
 
 def patch_xlsx_cell_values(path: Path, updates: dict[str, str | None]) -> int:
@@ -181,10 +234,7 @@ def patch_xlsx_cell_values(path: Path, updates: dict[str, str | None]) -> int:
                 new_xml = patched
         if changed == 0:
             return 0
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-            for name in zf.namelist():
-                part = new_xml if name == sheet_name else zf.read(name)
-                zout.writestr(zf.getinfo(name), part)
-        _write_bytes_with_retry(path, buffer.getvalue())
+        _validate_sheet_xml(new_xml)
+        payload = _repack_xlsx(zf, sheet_name, new_xml)
+        _write_bytes_with_retry(path, payload)
     return changed

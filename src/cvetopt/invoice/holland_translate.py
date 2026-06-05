@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 from collections.abc import Callable
 from datetime import date
@@ -116,19 +117,30 @@ def _translate_via_xlwings(
 ) -> None:
     import xlwings as xw
 
+    rows_sorted = sorted(
+        (int(m.group(2)), value)
+        for ref, value in updates.items()
+        if (m := re.match(r"^([A-Z]+)(\d+)$", ref))
+    )
+    if not rows_sorted:
+        return
+
     app: object | None = None
     wb: object | None = None
     try:
         app = xw.App(visible=False, add_book=False)
         app.display_alerts = False
-        wb = app.books.open(str(export_path))
+        app.screen_updating = False
+        wb = app.books.open(str(export_path), update_links=False)
         ws = wb.sheets[0]
-        for ref, value in updates.items():
-            m = re.match(r"^([A-Z]+)(\d+)$", ref)
-            if not m:
-                continue
-            addr = f"{m.group(1)}{m.group(2)}"
-            ws.range(addr).value = value if value else None
+        first_row = rows_sorted[0][0]
+        last_row = rows_sorted[-1][0]
+        values: list[list[object]] = []
+        row_map = dict(rows_sorted)
+        for row_n in range(first_row, last_row + 1):
+            val = row_map.get(row_n)
+            values.append([val if val else None])
+        ws.range(f"{trans_col}{first_row}").resize(len(values), 1).value = values
         wb.save()
         log("Сохранено через Excel (xlwings) — структура файла не меняется.")
     finally:
@@ -166,6 +178,10 @@ def translate_holland_export(
         export_path, dictionary, log=_lg
     )
 
+    bak = export_path.with_name(export_path.name + ".pre_translate.bak")
+    shutil.copy2(export_path, bak)
+    _lg(f"Резервная копия перед переводом: {bak.name}")
+
     if sys.platform == "win32":
         try:
             _translate_via_xlwings(export_path, trans_col, updates, log=_lg)
@@ -175,7 +191,7 @@ def translate_holland_export(
             )
             return translated, missing, total
         except Exception as e:
-            _lg(f"xlwings недоступен ({e}), пробую XML-патч…")
+            _lg(f"xlwings: {e} — пробую XML-патч…")
 
     patch_xlsx_cell_values(export_path, updates)
     _lg(
