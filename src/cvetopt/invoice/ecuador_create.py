@@ -21,8 +21,11 @@ _SHEET_DATA = 0
 _SHEET_PATH = 1
 _DATA_FIRST_ROW = 7
 _CLEAR_LAST_ROW = 500
-# msoAutomationSecurityForceDisable — без диалога макросов при открытии .xlsm
-_MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
+# msoAutomationSecurityLow — иначе Application.Run блокируется («макросы отключены»).
+_MSO_AUTOMATION_SECURITY_LOW = 1
+_RESERVED_OLE_BUTTONS = frozenset({"cbTransaction", "cbRestart", "cbCreateTimeFile"})
+_ZEBRA_EVEN = 12379351
+_ZEBRA_ODD = 9944773
 _CHECKBOX_BMPS = (
     "Red_Check_Off.bmp",
     "Red_Check_On.bmp",
@@ -86,9 +89,9 @@ def _configure_excel_app(app: object) -> None:
     app.screen_updating = False
     api = app.api
     api.DisplayAlerts = False
-    api.EnableEvents = False
+    api.EnableEvents = True
     try:
-        api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_FORCE_DISABLE
+        api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
     except Exception:
         pass
 
@@ -113,6 +116,55 @@ def _copy_checkbox_assets(template_dir: Path, target_dir: Path) -> None:
             shutil.copy2(src, target_dir / name)
 
 
+def _delete_row_command_buttons(sheet: object) -> None:
+    oles = sheet.api.OLEObjects()
+    for i in range(int(oles.Count), 0, -1):
+        ole = oles.Item(i)
+        if str(ole.Name) in _RESERVED_OLE_BUTTONS:
+            continue
+        try:
+            ole.Delete()
+        except Exception:
+            pass
+
+
+def _sync_row_checkboxes_com(
+    wb: object,
+    sheet: object,
+    *,
+    first_row: int,
+    last_row: int,
+    assets_dir: Path,
+) -> None:
+    """Запасной путь без Application.Run — как VBA SetCommandButton (один ClassType)."""
+    red_img = str((assets_dir / "Red_Check_Off.bmp").resolve())
+    green_img = str((assets_dir / "Green_Check_Off.bmp").resolve())
+    if not Path(red_img).is_file() or not Path(green_img).is_file():
+        raise FileNotFoundError(
+            f"Нет bmp для чекбоксов в {assets_dir} (Red_Check_Off.bmp, Green_Check_Off.bmp)."
+        )
+
+    app_api = wb.app.api
+    sheet.api.Columns("A:A").ColumnWidth = 2.2
+    sheet.api.Columns("B:B").ColumnWidth = 2.2
+    _delete_row_command_buttons(sheet)
+
+    for row in range(first_row, last_row + 1):
+        for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
+            cell = sheet.api.Cells(row, col)
+            ole = sheet.api.OLEObjects().Add("Forms.CommandButton.1")
+            btn = ole.Object
+            btn.Left = float(cell.Left)
+            btn.Top = float(cell.Top)
+            btn.Width = float(cell.Width)
+            btn.Height = float(cell.Height)
+            btn.Picture = app_api.LoadPicture(img)
+            btn.Caption = f"{prefix} {row} 0"
+
+        color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
+        sheet.api.Range(f"D{row}:AB{row}").Interior.Color = color
+
+
 def _ensure_cv_sync_macro(wb: object) -> None:
     """Public-макрос в Module1 (как SetCommandButton, без вставки колонки A)."""
     mod = wb.api.VBProject.VBComponents("Module1").CodeModule
@@ -125,14 +177,14 @@ def _ensure_cv_sync_macro(wb: object) -> None:
 
 def _sync_row_checkboxes(
     wb: object,
+    sheet: object,
     *,
     first_row: int,
     last_row: int,
+    assets_dir: Path,
     log: LogFn | None = None,
 ) -> None:
-    """
-    Чекбоксы через VBA (русская локаль Excel ломает COM OLEObjects.Add/LoadPicture).
-    """
+    """Чекбоксы: сначала VBA (как в шаблоне), при блокировке макросов — COM."""
     if last_row < first_row:
         return
 
@@ -141,34 +193,42 @@ def _sync_row_checkboxes(
             log(msg)
 
     _lg(f"Эквадор: чекбоксы для строк {first_row}–{last_row}…")
+
+    vba_errors: list[str] = []
     try:
         _ensure_cv_sync_macro(wb)
+        app = wb.app.api
+        wb_name = str(wb.name)
+        for spec in (
+            f"'{wb_name}'!{_CV_SYNC_MACRO}",
+            f"Module1.{_CV_SYNC_MACRO}",
+            _CV_SYNC_MACRO,
+        ):
+            try:
+                app.Run(spec, first_row, last_row)
+                return
+            except Exception as e:
+                vba_errors.append(f"{spec}: {e}")
     except Exception as e:
+        vba_errors.append(f"inject: {e}")
+
+    _lg("Эквадор: VBA недоступен, чекбоксы через COM…")
+    try:
+        _sync_row_checkboxes_com(
+            wb,
+            sheet,
+            first_row=first_row,
+            last_row=last_row,
+            assets_dir=assets_dir,
+        )
+    except Exception as com_err:
+        tail = "; ".join(vba_errors[-2:])
         raise RuntimeError(
-            "Не удалось добавить макрос чекбоксов в Module1. Включите в Excel: "
-            "Файл → Параметры → Центр управления безопасностью → "
-            "«Доверять доступ к объектной модели VBA-проекта». "
-            f"({e})"
-        ) from e
-
-    app = wb.app.api
-    wb_name = str(wb.name)
-    errors: list[str] = []
-    for spec in (
-        f"'{wb_name}'!{_CV_SYNC_MACRO}",
-        f"Module1.{_CV_SYNC_MACRO}",
-        _CV_SYNC_MACRO,
-    ):
-        try:
-            app.Run(spec, first_row, last_row)
-            return
-        except Exception as e:
-            errors.append(f"{spec}: {e}")
-
-    tail = "; ".join(errors[-3:])
-    raise RuntimeError(
-        f"Не удалось вызвать {_CV_SYNC_MACRO} для чекбоксов. ({tail})"
-    )
+            "Не удалось создать чекбоксы (VBA и COM). "
+            "Проверьте: макросы разрешены для автоматизации, папка шаблона в доверенном "
+            "расположении Excel, bmp Red_Check/Green_Check рядом с книгой. "
+            f"VBA: {tail}. COM: {com_err}"
+        ) from com_err
 
 
 def _apply_create_file_ui(workbook: object, output_name: str) -> None:
@@ -281,8 +341,10 @@ def create_ecuador_file_from_biflorica(
 
         _sync_row_checkboxes(
             wb,
+            data_sheet,
             first_row=_DATA_FIRST_ROW,
             last_row=last_row,
+            assets_dir=tmp_copy.parent,
             log=log,
         )
 
