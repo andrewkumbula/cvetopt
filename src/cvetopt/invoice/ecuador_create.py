@@ -39,12 +39,12 @@ _CHECKBOX_BMPS = (
 )
 _CV_CREATE_MACRO = "cv_Run_CreateFile"
 _CV_CREATE_VBA = """
-Public Sub cv_Run_CreateFile(Optional aSaveDir As String = "")
+Public Sub cv_Run_CreateFile(aSaveDir As String)
     Dim aName As String
     Dim aPath As String
     Dim saveDir As String
     saveDir = aSaveDir
-    If saveDir = "" Then saveDir = aPathToWrite
+    If saveDir = "" Then Exit Sub
     aName = "Эквадор " & Format(Now(), "d/m/yy hh.nn") & ".xlsm"
     aPath = saveDir & "\\" & aName
     ThisWorkbook.Save
@@ -340,6 +340,7 @@ def _sync_row_checkboxes(
         ):
             try:
                 app.Run(spec, first_row, last_row)
+                _lg("Эквадор: чекбоксы готовы (VBA).")
                 return
             except Exception as e:
                 vba_errors.append(f"{spec}: {e}")
@@ -355,6 +356,7 @@ def _sync_row_checkboxes(
             last_row=last_row,
             assets_dir=assets_dir,
         )
+        _lg("Эквадор: чекбоксы готовы (COM).")
     except Exception as com_err:
         tail = "; ".join(vba_errors[-2:])
         raise RuntimeError(
@@ -365,8 +367,8 @@ def _sync_row_checkboxes(
         ) from com_err
 
 
-def _ensure_cv_create_macro(wb: object, sheet_codename: str) -> None:
-    mod = wb.api.VBProject.VBComponents(sheet_codename).CodeModule
+def _ensure_cv_create_macro(wb: object) -> None:
+    mod = wb.api.VBProject.VBComponents("Module1").CodeModule
     line_count = int(mod.CountOfLines)
     existing = mod.Lines(1, line_count) if line_count else ""
     if f"Sub {_CV_CREATE_MACRO}" in existing:
@@ -387,9 +389,9 @@ def _invoke_create_file_macro(
         if log is not None:
             log(msg)
 
-    _lg("Эквадор: «Создать файл» (макрос)…")
+    _lg("Эквадор: «Создать файл» (макрос VBA)…")
     try:
-        _ensure_cv_create_macro(wb, sheet_codename)
+        _ensure_cv_create_macro(wb)
     except Exception as e:
         raise RuntimeError(
             "Не удалось добавить макрос «Создать файл». Включите в Excel "
@@ -401,10 +403,11 @@ def _invoke_create_file_macro(
     app = wb.app.api
     wb_name = str(wb.name)
     errors: list[str] = []
+    _ = sheet_codename
     for spec in (
-        f"'{wb_name}'!{_CV_CREATE_MACRO}",
-        f"'{sheet_codename}'.{_CV_CREATE_MACRO}",
         _CV_CREATE_MACRO,
+        f"Module1.{_CV_CREATE_MACRO}",
+        f"'{wb_name}'!{_CV_CREATE_MACRO}",
     ):
         try:
             app.Run(spec, save_dir)
@@ -438,7 +441,7 @@ def _save_via_python(
 
     out_name = ecuador_output_basename()
     out_path = (output_dir / out_name).resolve()
-    _lg(f"Эквадор: сохраняю (Python SaveAs) → {out_path}")
+    _lg(f"Эквадор: сохраняю (как «Создать файл») → {out_path}")
     _apply_create_file_ui(wb, out_name)
     wb.api.SaveAs(str(out_path))
     wb.save()
@@ -481,11 +484,12 @@ def create_ecuador_file_from_biflorica(
     *,
     template_path: Path | None = None,
     output_dir: Path | None = None,
-    use_create_file_macro: bool = True,
+    use_create_file_macro: bool | None = None,
     log: LogFn | None = None,
 ) -> Path:
     """
-    Преобразование в Python, запись в шаблон .xlsm, затем «Создать файл» (VBA) или SaveAs.
+    Преобразование в Python, запись в шаблон .xlsm, сохранение как «Создать файл».
+    По умолчанию SaveAs из Python; VBA — только если use_create_file_macro=True в config.
     Только Windows + установленный Excel (xlwings).
     """
     if sys.platform != "win32":
@@ -498,8 +502,15 @@ def create_ecuador_file_from_biflorica(
     from cvetopt.core.runtime_settings import load_runtime_settings
 
     runtime = load_runtime_settings(env)
+    yaml_ecuador = env.yaml_config().ecuador_create
     template = template_path or resolve_ecuador_template(env, runtime.ecuador_template_path)
     out_dir = output_dir or resolve_ecuador_output_dir(env, runtime.ecuador_output_dir)
+    if use_create_file_macro is None:
+        env_flag = os.environ.get("ECUADOR_USE_CREATE_FILE_MACRO", "").strip().lower()
+        if env_flag in ("1", "true", "yes"):
+            use_create_file_macro = True
+        else:
+            use_create_file_macro = yaml_ecuador.use_create_file_macro
 
     def _lg(msg: str) -> None:
         if log is not None:
@@ -582,7 +593,7 @@ def create_ecuador_file_from_biflorica(
                     log=log,
                 )
             except Exception as e:
-                _lg(f"Эквадор: макрос «Создать файл» не сработал ({e}) — SaveAs из Python.")
+                _lg(f"Эквадор: макрос VBA недоступен ({e!s:.200}) — SaveAs из Python.")
                 out_path = _save_via_python(wb, output_dir=out_dir, log=log)
         else:
             out_path = _save_via_python(wb, output_dir=out_dir, log=log)

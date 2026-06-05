@@ -83,6 +83,7 @@ auto1_pipeline:
 ecuador_create:
   enabled: true
   auto_after_biflorica: false
+  use_create_file_macro: false
 
 # Перевод Description в выгрузке Голландия_1_*.xlsx (словарь: B — англ., C — перевод).
 holland_translate:

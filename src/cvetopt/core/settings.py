@@ -183,6 +183,8 @@ class EcuadorCreateConfig(BaseModel):
     enabled: bool = True
     # Пока тестируем отдельной кнопкой; True — создавать сразу после каждого скачивания Biflorica.
     auto_after_biflorica: bool = False
+    # True — вызывать VBA cv_Run_CreateFile (нужен доступ к VBA); False — SaveAs из Python (стабильно).
+    use_create_file_macro: bool = False
 
 
 class DelmirSelectors(BaseModel):
