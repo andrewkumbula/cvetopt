@@ -4,7 +4,7 @@ import os
 import re
 import shutil
 import sys
-import tempfile
+import time
 import zipfile
 from collections.abc import Callable
 from datetime import datetime
@@ -24,9 +24,9 @@ _SHEET_DATA = 0
 _SHEET_PATH = 1
 _DATA_FIRST_ROW = 7
 _CLEAR_LAST_ROW = 500
-# Low — для Application.Run; ForceDisable — при открытии .xlsm (иначе Workbook_Open → диалог).
+# Макросы должны быть включены при открытии книги — иначе Run требует переоткрытия.
 _MSO_AUTOMATION_SECURITY_LOW = 1
-_MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
+_WORK_COPY_NAME = "_cvetopt_ecuador_work.xlsm"
 _PATH_SHEET_AUTO_OPEN_CELL = '<c r="A2" t="inlineStr"><is><t>False</t></is></c>'
 _RESERVED_OLE_BUTTONS = frozenset({"cbTransaction", "cbRestart", "cbCreateTimeFile"})
 _ZEBRA_EVEN = 12379351
@@ -136,18 +136,8 @@ def _configure_excel_app_base(app: object) -> None:
     api.DisplayAlerts = False
 
 
-def _configure_excel_app_for_open(app: object) -> None:
-    """Без макросов при открытии — Path!A2=True иначе вызывает sOpenFile (диалог файла)."""
-    _configure_excel_app_base(app)
-    api = app.api
-    api.EnableEvents = False
-    try:
-        api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_FORCE_DISABLE
-    except Exception:
-        pass
-
-
-def _configure_excel_app_for_macros(app: object) -> None:
+def _configure_excel_app(app: object) -> None:
+    """Path!A2 патчится до открытия — макросы можно держать включёнными."""
     _configure_excel_app_base(app)
     api = app.api
     api.EnableEvents = True
@@ -155,6 +145,30 @@ def _configure_excel_app_for_macros(app: object) -> None:
         api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
     except Exception:
         pass
+
+
+def _prepare_work_copy(template: Path) -> Path:
+    """Копия в папке шаблона (доверенное расположение + bmp рядом)."""
+    work = template.parent / _WORK_COPY_NAME
+    if work.exists():
+        work.unlink()
+    shutil.copy2(template, work)
+    _patch_path_auto_open_off(work)
+    return work
+
+
+def _load_picture(app_api: object, image_path: str) -> object:
+    path = str(Path(image_path).resolve())
+    try:
+        return app_api.LoadPicture(path)
+    except Exception:
+        pass
+    try:
+        import win32com.client
+
+        return win32com.client.Dispatch(app_api).LoadPicture(path)
+    except Exception as exc:
+        raise RuntimeError(f"LoadPicture({path}): {exc}") from exc
 
 
 def _patch_path_auto_open_off(xlsm_path: Path) -> None:
@@ -263,13 +277,22 @@ def _sync_row_checkboxes_com(
     for row in range(first_row, last_row + 1):
         for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
             cell = sheet.api.Cells(row, col)
-            ole = sheet.api.OLEObjects().Add("Forms.CommandButton.1")
+            left = float(cell.Left)
+            top = float(cell.Top)
+            width = float(cell.Width)
+            height = float(cell.Height)
+            ole = sheet.api.OLEObjects().Add(
+                "Forms.CommandButton.1",
+                "",
+                False,
+                False,
+                left,
+                top,
+                width,
+                height,
+            )
             btn = ole.Object
-            btn.Left = float(cell.Left)
-            btn.Top = float(cell.Top)
-            btn.Width = float(cell.Width)
-            btn.Height = float(cell.Height)
-            btn.Picture = app_api.LoadPicture(img)
+            btn.Picture = _load_picture(app_api, img)
             btn.Caption = f"{prefix} {row} 0"
 
         color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
@@ -311,9 +334,9 @@ def _sync_row_checkboxes(
         app = wb.app.api
         wb_name = str(wb.name)
         for spec in (
-            f"'{wb_name}'!{_CV_SYNC_MACRO}",
-            f"Module1.{_CV_SYNC_MACRO}",
             _CV_SYNC_MACRO,
+            f"Module1.{_CV_SYNC_MACRO}",
+            f"'{wb_name}'!{_CV_SYNC_MACRO}",
         ):
             try:
                 app.Run(spec, first_row, last_row)
@@ -400,7 +423,26 @@ def _invoke_create_file_macro(
             errors.append(f"{spec}: {e}")
 
     tail = "; ".join(errors[-3:])
-    raise RuntimeError(f"Не удалось вызвать «Создать файл». ({tail})")
+    raise RuntimeError(f"Не удалось вызвать «Создать файл» (VBA). ({tail})")
+
+
+def _save_via_python(
+    wb: object,
+    *,
+    output_dir: Path,
+    log: LogFn | None = None,
+) -> Path:
+    def _lg(msg: str) -> None:
+        if log is not None:
+            log(msg)
+
+    out_name = ecuador_output_basename()
+    out_path = (output_dir / out_name).resolve()
+    _lg(f"Эквадор: сохраняю (Python SaveAs) → {out_path}")
+    _apply_create_file_ui(wb, out_name)
+    wb.api.SaveAs(str(out_path))
+    wb.save()
+    return out_path
 
 
 def _newest_ecuador_xlsm(output_dir: Path) -> Path | None:
@@ -492,19 +534,16 @@ def create_ecuador_file_from_biflorica(
 
     app: object | None = None
     wb: object | None = None
-    tmp_copy: Path | None = None
+    work_copy: Path | None = None
     try:
         app = xw.App(visible=visible, add_book=False)
-        _configure_excel_app_for_open(app)
+        _configure_excel_app(app)
 
-        with tempfile.NamedTemporaryFile(suffix=".xlsm", delete=False) as tmp:
-            tmp_copy = Path(tmp.name)
-        shutil.copy2(template, tmp_copy)
-        _patch_path_auto_open_off(tmp_copy)
-        _copy_checkbox_assets(template.parent, tmp_copy.parent)
+        work_copy = _prepare_work_copy(template)
+        assets_dir = work_copy.parent
 
-        _lg("Эквадор: открываю шаблон (Path!A2=False, макросы при открытии выкл.)…")
-        wb = _open_workbook_quiet(app, tmp_copy)
+        _lg(f"Эквадор: открываю {work_copy.name} (Path!A2=False, папка шаблона)…")
+        wb = _open_workbook_quiet(app, work_copy)
         _lg(f"Эквадор: шаблон открыт — {wb.name}")
 
         data_sheet = wb.sheets[_SHEET_DATA]
@@ -521,33 +560,34 @@ def create_ecuador_file_from_biflorica(
         path_sheet.range("A1").value = str(biflorica_path)
         path_sheet.range("B1").value = biflorica_path.name
 
-        _configure_excel_app_for_macros(app)
-        _sync_row_checkboxes(
-            wb,
-            data_sheet,
-            first_row=_DATA_FIRST_ROW,
-            last_row=last_row,
-            assets_dir=tmp_copy.parent,
-            log=log,
-        )
-
-        if use_create_file_macro:
-            out_path = _invoke_create_file_macro(
+        try:
+            _sync_row_checkboxes(
                 wb,
-                path_sheet,
-                output_dir=out_dir,
-                sheet_codename=sheet_codename,
+                data_sheet,
+                first_row=_DATA_FIRST_ROW,
+                last_row=last_row,
+                assets_dir=assets_dir,
                 log=log,
             )
-            _copy_checkbox_assets(template.parent, out_path.parent)
+        except Exception as e:
+            _lg(f"Эквадор: чекбоксы не созданы ({e}) — продолжаю без них.")
+
+        if use_create_file_macro:
+            try:
+                out_path = _invoke_create_file_macro(
+                    wb,
+                    path_sheet,
+                    output_dir=out_dir,
+                    sheet_codename=sheet_codename,
+                    log=log,
+                )
+            except Exception as e:
+                _lg(f"Эквадор: макрос «Создать файл» не сработал ({e}) — SaveAs из Python.")
+                out_path = _save_via_python(wb, output_dir=out_dir, log=log)
         else:
-            out_name = ecuador_output_basename()
-            out_path = (out_dir / out_name).resolve()
-            _lg(f"Эквадор: сохраняю → {out_path}")
-            _apply_create_file_ui(wb, out_name)
-            wb.api.SaveAs(str(out_path))
-            _copy_checkbox_assets(template.parent, out_path.parent)
-            wb.save()
+            out_path = _save_via_python(wb, output_dir=out_dir, log=log)
+
+        _copy_checkbox_assets(template.parent, out_path.parent)
 
         for book in list(app.books):
             try:
@@ -563,8 +603,13 @@ def create_ecuador_file_from_biflorica(
                 wb.close()
             except Exception:
                 pass
-        if tmp_copy is not None:
-            tmp_copy.unlink(missing_ok=True)
+        if work_copy is not None:
+            for attempt in range(5):
+                try:
+                    work_copy.unlink(missing_ok=True)
+                    break
+                except OSError:
+                    time.sleep(0.3)
         if app is not None:
             try:
                 app.quit()
