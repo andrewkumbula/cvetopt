@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import sys
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -66,24 +68,12 @@ def _find_description_columns(header: dict[str, str]) -> tuple[str, str] | None:
     return None
 
 
-def translate_holland_export(
+def _build_translation_plan(
     export_path: Path,
-    dictionary_path: Path,
+    dictionary: dict[str, str],
     *,
-    log: LogFn | None = None,
-) -> tuple[int, int, int]:
-    """
-    Заполняет столбец справа от Description переводом из словаря.
-    Сохраняет xlsx через точечный XML-патч (чекбоксы VBA не удаляются).
-    """
-    _lg = log or _default_log
-    export_path = export_path.resolve()
-    dictionary = load_description_dictionary(dictionary_path)
-    if not dictionary:
-        raise RuntimeError(f"Словарь пуст: {dictionary_path}")
-
-    _lg(f"Словарь: {len(dictionary)} записей из {dictionary_path.name}")
-
+    log: LogFn,
+) -> tuple[str, str, dict[str, str | None], int, int, int]:
     grid = read_xlsx_grid(export_path)
     rows = grid_by_row(grid)
     header = rows.get(1, {})
@@ -93,7 +83,7 @@ def translate_holland_export(
             f"В {export_path.name} нет заголовка Description в первой строке."
         )
     desc_col, trans_col = cols
-    _lg(f"Description → колонка {trans_col} (рядом с {desc_col})")
+    log(f"Description → колонка {trans_col} (рядом с {desc_col})")
 
     updates: dict[str, str | None] = {}
     translated = 0
@@ -114,12 +104,84 @@ def translate_holland_export(
         else:
             updates[ref] = None
             missing += 1
+    return desc_col, trans_col, updates, translated, missing, total
+
+
+def _translate_via_xlwings(
+    export_path: Path,
+    trans_col: str,
+    updates: dict[str, str | None],
+    *,
+    log: LogFn,
+) -> None:
+    import xlwings as xw
+
+    app: object | None = None
+    wb: object | None = None
+    try:
+        app = xw.App(visible=False, add_book=False)
+        app.display_alerts = False
+        wb = app.books.open(str(export_path))
+        ws = wb.sheets[0]
+        for ref, value in updates.items():
+            m = re.match(r"^([A-Z]+)(\d+)$", ref)
+            if not m:
+                continue
+            addr = f"{m.group(1)}{m.group(2)}"
+            ws.range(addr).value = value if value else None
+        wb.save()
+        log("Сохранено через Excel (xlwings) — структура файла не меняется.")
+    finally:
+        if wb is not None:
+            try:
+                wb.close()
+            except Exception:
+                pass
+        if app is not None:
+            try:
+                app.quit()
+            except Exception:
+                pass
+
+
+def translate_holland_export(
+    export_path: Path,
+    dictionary_path: Path,
+    *,
+    log: LogFn | None = None,
+) -> tuple[int, int, int]:
+    """
+    Заполняет столбец справа от Description переводом из словаря.
+    На Windows — через Excel (xlwings), иначе точечный XML-патч без ElementTree.
+    """
+    _lg = log or _default_log
+    export_path = export_path.resolve()
+    dictionary = load_description_dictionary(dictionary_path)
+    if not dictionary:
+        raise RuntimeError(f"Словарь пуст: {dictionary_path}")
+
+    _lg(f"Словарь: {len(dictionary)} записей из {dictionary_path.name}")
+
+    _desc_col, trans_col, updates, translated, missing, total = _build_translation_plan(
+        export_path, dictionary, log=_lg
+    )
+
+    if sys.platform == "win32":
+        try:
+            _translate_via_xlwings(export_path, trans_col, updates, log=_lg)
+            _lg(
+                f"Перевод в {export_path.name}: строк {total}, "
+                f"переведено {translated}, без перевода {missing}."
+            )
+            return translated, missing, total
+        except Exception as e:
+            _lg(f"xlwings недоступен ({e}), пробую XML-патч…")
 
     patch_xlsx_cell_values(export_path, updates)
     _lg(
         f"Перевод в {export_path.name}: строк {total}, "
         f"переведено {translated}, без перевода {missing} "
-        "(файл не пересобирался — чекбоксы сохранены)."
+        "(XML-патч, чекбоксы и разметка сохранены)."
     )
     return translated, missing, total
 

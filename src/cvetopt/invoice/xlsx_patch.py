@@ -7,12 +7,25 @@ import stat
 import sys
 import time
 import zipfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
-_NS_URI = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-_NS = {"m": _NS_URI}
-_COL_RE = re.compile(r"^([A-Z]+)(\d+)$")
+_COL_REF_RE = re.compile(r"^([A-Z]+)(\d+)$")
+
+
+def _escape_xml_text(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _inline_str_inner(text: str) -> bytes:
+    t = _escape_xml_text(text)
+    if text != text.strip() or " " in text:
+        return f'<is><t xml:space="preserve">{t}</t></is>'.encode("utf-8")
+    return f"<is><t>{t}</t></is>".encode("utf-8")
 
 
 def _col_letter_to_index(col: str) -> int:
@@ -20,83 +33,6 @@ def _col_letter_to_index(col: str) -> int:
     for ch in col.upper():
         n = n * 26 + (ord(ch) - ord("A") + 1)
     return n - 1
-
-
-def _cell_text(cell: ET.Element, shared: list[str]) -> str:
-    v = cell.find("m:v", _NS)
-    if v is not None and v.text is not None:
-        if cell.get("t") == "s":
-            return shared[int(v.text)]
-        return v.text
-    is_node = cell.find("m:is", _NS)
-    if is_node is not None:
-        return "".join((n.text or "") for n in is_node.iter())
-    return ""
-
-
-def _clear_cell(cell: ET.Element) -> None:
-    for tag in ("v", "is", "f"):
-        node = cell.find(f"m:{tag}", _NS)
-        if node is not None:
-            cell.remove(node)
-    if cell.get("t") is not None:
-        del cell.attrib["t"]
-
-
-def _set_inline_str(cell: ET.Element, text: str, *, style: str | None) -> None:
-    _clear_cell(cell)
-    if style:
-        cell.set("s", style)
-    cell.set("t", "inlineStr")
-    is_el = ET.SubElement(cell, f"{{{_NS_URI}}}is")
-    t_el = ET.SubElement(is_el, f"{{{_NS_URI}}}t")
-    if text.startswith(" ") or text.endswith(" "):
-        t_el.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
-    t_el.text = text
-
-
-def _find_row(sheet_data: ET.Element, row_num: int) -> ET.Element | None:
-    for row in sheet_data.findall("m:row", _NS):
-        if row.get("r") == str(row_num):
-            return row
-    return None
-
-
-def _ensure_row(sheet_data: ET.Element, row_num: int) -> ET.Element:
-    row = _find_row(sheet_data, row_num)
-    if row is not None:
-        return row
-    row = ET.Element(f"{{{_NS_URI}}}row", {"r": str(row_num)})
-    inserted = False
-    for idx, existing in enumerate(sheet_data.findall("m:row", _NS)):
-        er = int(existing.get("r", "0"))
-        if er > row_num:
-            sheet_data.insert(idx, row)
-            inserted = True
-            break
-    if not inserted:
-        sheet_data.append(row)
-    return row
-
-
-def _find_cell(row: ET.Element, ref: str) -> ET.Element | None:
-    for cell in row.findall("m:c", _NS):
-        if cell.get("r") == ref:
-            return cell
-    return None
-
-
-def _insert_cell_sorted(row: ET.Element, cell: ET.Element, ref: str) -> None:
-    new_idx = _col_letter_to_index("".join(ch for ch in ref if ch.isalpha()))
-    for idx, existing in enumerate(row.findall("m:c", _NS)):
-        er = existing.get("r", "")
-        m = _COL_RE.match(er)
-        if not m:
-            continue
-        if _col_letter_to_index(m.group(1)) > new_idx:
-            row.insert(idx, cell)
-            return
-    row.append(cell)
 
 
 def _writable_win_errors(exc: BaseException) -> bool:
@@ -108,7 +44,6 @@ def _writable_win_errors(exc: BaseException) -> bool:
 
 
 def _write_bytes_with_retry(path: Path, data: bytes, *, attempts: int = 12) -> None:
-    """Прямая запись в xlsx (без rename .tmp) — меньше конфликтов с Excel на Windows."""
     last_err: BaseException | None = None
     for i in range(attempts):
         try:
@@ -127,7 +62,7 @@ def _write_bytes_with_retry(path: Path, data: bytes, *, attempts: int = 12) -> N
             time.sleep(0.35 * (i + 1))
     hint = (
         f"Не удалось записать {path}. "
-        "Закройте этот файл в Excel (и проводнике) и снова нажмите «Перевод»."
+        "Закройте этот файл в Excel и снова нажмите «Перевод»."
     )
     if sys.platform == "win32":
         hint += " Если файл только что создан auto1 — подождите 2–3 сек."
@@ -141,10 +76,93 @@ def _first_sheet_path(names: list[str]) -> str | None:
     )
 
 
+def _cell_pattern(ref: str) -> re.Pattern[bytes]:
+    ref_b = ref.encode("ascii")
+    return re.compile(
+        rb'(<c r="' + re.escape(ref_b) + rb'"[^>]*>)(.*?)(</c>)',
+        re.DOTALL,
+    )
+
+
+def _row_pattern(row_num: int) -> re.Pattern[bytes]:
+    return re.compile(
+        rb'(<row r="' + str(row_num).encode() + rb'"[^>]*>)(.*?)(</row>)',
+        re.DOTALL,
+    )
+
+
+def _style_from_row(sheet: bytes, row_num: int, col_letter: str) -> bytes:
+    """Берёт s=\"…\" с ячейки слева от целевой колонки в той же строке."""
+    row_m = _row_pattern(row_num).search(sheet)
+    if not row_m:
+        return b""
+    row_xml = row_m.group(0)
+    target_idx = _col_letter_to_index(col_letter)
+    style = b""
+    for cell_m in re.finditer(rb'<c r="([A-Z]+)(\d+)"([^>]*)>', row_xml):
+        col = cell_m.group(1).decode()
+        if _col_letter_to_index(col) < target_idx:
+            attrs = cell_m.group(3)
+            sm = re.search(rb'\ss="(\d+)"', attrs)
+            if sm:
+                style = sm.group(0)
+    return style
+
+
+def _open_tag_for(ref: str, style: bytes, *, inline: bool) -> bytes:
+    base = b'<c r="' + ref.encode("ascii") + b'"'
+    if style:
+        base += style
+    if inline:
+        base += b' t="inlineStr"'
+    return base + b">"
+
+
+def _patch_one_cell(sheet: bytes, ref: str, value: str | None) -> bytes:
+    m = _COL_REF_RE.match(ref)
+    if not m:
+        return sheet
+    col_l, row_n = m.group(1), int(m.group(2))
+    pat = _cell_pattern(ref)
+    style = _style_from_row(sheet, row_n, col_l)
+
+    existing = pat.search(sheet)
+    if value is None or not str(value).strip():
+        if not existing:
+            return sheet
+        open_tag = existing.group(1)
+        cleared = re.sub(rb'\s+t="[^"]*"', b"", open_tag) + b">"
+        return pat.sub(cleared + b"</c>", sheet, count=1)
+
+    inner = _inline_str_inner(str(value))
+    if existing:
+        open_tag = existing.group(1)
+        if b't="inlineStr"' not in open_tag:
+            open_tag = open_tag[:-1] + b' t="inlineStr">'
+        return pat.sub(open_tag + inner + b"</c>", sheet, count=1)
+
+    row_pat = _row_pattern(row_n)
+    row_m = row_pat.search(sheet)
+    if not row_m:
+        return sheet
+    new_cell = _open_tag_for(ref, style, inline=True) + inner + b"</c>"
+    row_open, row_body, row_close = row_m.group(1), row_m.group(2), row_m.group(3)
+    new_idx = _col_letter_to_index(col_l)
+    insert_at = len(row_body)
+    for cell_m in re.finditer(rb'<c r="([A-Z]+)\d+"', row_body):
+        col = cell_m.group(1).decode()
+        if _col_letter_to_index(col) > new_idx:
+            insert_at = cell_m.start()
+            break
+    new_body = row_body[:insert_at] + new_cell + row_body[insert_at:]
+    new_row = row_open + new_body + row_close
+    return sheet[: row_m.start()] + new_row + sheet[row_m.end() :]
+
+
 def patch_xlsx_cell_values(path: Path, updates: dict[str, str | None]) -> int:
     """
-    Меняет только ячейки в sheet XML, остальные части xlsx (чекбоксы, drawing) не трогает.
-    updates: «E2» → текст или None (очистить).
+    Патчит только фрагменты <c> в sheet1.xml (без ElementTree),
+    чтобы не ломать namespace, hyperlinks и чекбоксы.
     """
     if not updates:
         return 0
@@ -154,58 +172,19 @@ def patch_xlsx_cell_values(path: Path, updates: dict[str, str | None]) -> int:
         sheet_name = _first_sheet_path(zf.namelist())
         if not sheet_name:
             raise RuntimeError(f"В {path.name} нет листа worksheet.")
-        root = ET.fromstring(zf.read(sheet_name))
-        shared: list[str] = []
-        if "xl/sharedStrings.xml" in zf.namelist():
-            sroot = ET.fromstring(zf.read("xl/sharedStrings.xml"))
-            for si in sroot.findall(".//m:si", _NS):
-                shared.append("".join((n.text or "") for n in si.iter()))
-
-        sheet_data = root.find("m:sheetData", _NS)
-        if sheet_data is None:
-            raise RuntimeError(f"В {path.name} нет sheetData.")
-
+        sheet_xml = zf.read(sheet_name)
+        new_xml = sheet_xml
         for ref, value in updates.items():
-            m = _COL_RE.match(ref)
-            if not m:
-                continue
-            col_l, row_n = m.group(1), int(m.group(2))
-            row = _ensure_row(sheet_data, row_n)
-            cell = _find_cell(row, ref)
-            if cell is None:
-                style = None
-                # стиль с ячейки слева (Description), если есть
-                for c in row.findall("m:c", _NS):
-                    cr = c.get("r", "")
-                    cm = _COL_RE.match(cr)
-                    if cm and _col_letter_to_index(cm.group(1)) < _col_letter_to_index(col_l):
-                        style = c.get("s")
-                cell = ET.Element(f"{{{_NS_URI}}}c", {"r": ref})
-                if style:
-                    cell.set("s", style)
-                _insert_cell_sorted(row, cell, ref)
-
-            if value is None or str(value).strip() == "":
-                if list(cell) or cell.get("t"):
-                    _clear_cell(cell)
-                    changed += 1
-            else:
-                prev = _cell_text(cell, shared)
-                text = str(value)
-                if prev != text:
-                    _set_inline_str(cell, text, style=cell.get("s"))
-                    changed += 1
-
+            patched = _patch_one_cell(new_xml, ref, value)
+            if patched != new_xml:
+                changed += 1
+                new_xml = patched
         if changed == 0:
             return 0
-
-        ET.register_namespace("", _NS_URI)
-        out_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zout:
             for name in zf.namelist():
-                part = out_xml if name == sheet_name else zf.read(name)
-                zinfo = zf.getinfo(name)
-                zout.writestr(zinfo, part)
+                part = new_xml if name == sheet_name else zf.read(name)
+                zout.writestr(zf.getinfo(name), part)
         _write_bytes_with_retry(path, buffer.getvalue())
     return changed
