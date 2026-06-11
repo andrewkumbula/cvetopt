@@ -128,8 +128,8 @@ End Sub
 _MARKER_CLASS_VBA = """
 Public WithEvents EventButton As MSForms.CommandButton
 
-Private Function _holland_bmp(name As String) As String
-    _holland_bmp = ThisWorkbook.Path & "\\" & name
+Private Function cvHollandBmp(name As String) As String
+    cvHollandBmp = ThisWorkbook.Path & "\\" & name
 End Function
 
 Private Sub EventButton_Click()
@@ -141,7 +141,7 @@ Private Sub EventButton_Click()
         If .Name = "cbHollandEdit" Then Exit Sub
         If Left(.Caption, 1) = "1" Then
             If Right(.Caption, 1) = "0" Then
-                .Picture = LoadPicture(_holland_bmp("Red_Check_On.bmp"))
+                .Picture = LoadPicture(cvHollandBmp("Red_Check_On.bmp"))
                 aStr = .Caption
                 aStr = Right(aStr, Len(aStr) - 2)
                 aStr = Left(aStr, Len(aStr) - 2)
@@ -150,7 +150,7 @@ Private Sub EventButton_Click()
                 aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 209, 209)
                 .Caption = Left(.Caption, Len(.Caption) - 2) & " 1"
             Else
-                .Picture = LoadPicture(_holland_bmp("Red_Check_Off.bmp"))
+                .Picture = LoadPicture(cvHollandBmp("Red_Check_Off.bmp"))
                 aStr = .Caption
                 aStr = Right(aStr, Len(aStr) - 2)
                 aStr = Left(aStr, Len(aStr) - 2)
@@ -161,7 +161,7 @@ Private Sub EventButton_Click()
             End If
         ElseIf Left(.Caption, 1) = "2" Then
             If Right(.Caption, 1) = "0" Then
-                .Picture = LoadPicture(_holland_bmp("Green_Check_On.bmp"))
+                .Picture = LoadPicture(cvHollandBmp("Green_Check_On.bmp"))
                 aStr = .Caption
                 aStr = Right(aStr, Len(aStr) - 2)
                 aStr = Left(aStr, Len(aStr) - 2)
@@ -170,7 +170,7 @@ Private Sub EventButton_Click()
                 aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(0, 255, 0)
                 .Caption = Left(.Caption, Len(.Caption) - 2) & " 1"
             Else
-                .Picture = LoadPicture(_holland_bmp("Green_Check_Off.bmp"))
+                .Picture = LoadPicture(cvHollandBmp("Green_Check_Off.bmp"))
                 aStr = .Caption
                 aStr = Right(aStr, Len(aStr) - 2)
                 aStr = Left(aStr, Len(aStr) - 2)
@@ -271,7 +271,12 @@ def _ensure_class_module(vbproject: object, name: str, code: str) -> None:
         mod.Name = name
     code_module = mod.CodeModule
     existing = code_module.Lines(1, code_module.CountOfLines) if code_module.CountOfLines else ""
-    if "EventButton_Click" in existing and "Red_Check_On.bmp" in existing:
+    if (
+        "EventButton_Click" in existing
+        and "Red_Check_On.bmp" in existing
+        and "cvHollandBmp" in existing
+        and "_holland_bmp" not in existing
+    ):
         return
     if code_module.CountOfLines:
         code_module.DeleteLines(1, code_module.CountOfLines)
