@@ -152,6 +152,22 @@
     </div>
 
     <div class="row">
+      <form method="post" action="/run/mail-attachments" data-job-form id="mail-form" class="job-form">
+        <button type="submit" data-job-btn>Скачать вложения из почты</button>
+      </form>
+    </div>
+
+    <div class="row">
+      <form method="post" action="/run/ecuador-create" data-job-form id="ecuador-create-form" class="job-form">
+        <button type="submit" data-job-btn>Эквадор: создать файл (тест)</button>
+      </form>
+      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
+        Windows + Excel. Берёт последний <code>BiFlorica-*.xlsx</code> из папки скачивания,
+        шаблон и папки — в <strong>Настройки</strong>. Старые <code>Эквадор *.xlsm</code> уходят в архив.
+      </p>
+    </div>
+
+    <div class="row">
       <form method="post" action="/run/balance-auto" data-job-form id="balance-auto-form" class="job-form">
         <button type="submit" data-job-btn>Заполнить Auto_new.xls (перелёты Biflorica + Транспорт трак del-mir)</button>
       </form>
@@ -167,16 +183,6 @@
     </div>
 
     <div class="row">
-      <form method="post" action="/run/ecuador-create" data-job-form id="ecuador-create-form" class="job-form">
-        <button type="submit" data-job-btn>Эквадор: создать файл (тест)</button>
-      </form>
-      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        Windows + Excel. Берёт последний <code>BiFlorica-*.xlsx</code> из папки скачивания,
-        шаблон и папки — в <strong>Настройки</strong>. Старые <code>Эквадор *.xlsm</code> уходят в архив.
-      </p>
-    </div>
-
-    <div class="row">
       <form method="post" action="/run/holland-translate" data-job-form id="holland-translate-form" class="job-form">
         <button type="submit" data-job-btn>Перевод</button>
       </form>
@@ -184,12 +190,6 @@
         Пути — в <strong>Настройки</strong> (словарь и папка <code>Голландия_1_*.xlsx</code>).
         Без перевода — Description дописывается в <code>Словарь.xls</code> (кол. B, C пустая).
       </p>
-    </div>
-
-    <div class="row">
-      <form method="post" action="/run/mail-attachments" data-job-form id="mail-form" class="job-form">
-        <button type="submit" data-job-btn>Скачать вложения из почты</button>
-      </form>
     </div>
   </section>
 
