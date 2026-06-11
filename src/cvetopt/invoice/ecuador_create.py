@@ -185,7 +185,11 @@ def _ensure_picture_helper_vba(wb: object) -> None:
         code_module.AddFromString(_PICTURE_HELPER_VBA)
 
 
-def _load_picture(app_api: object, image_path: str, *, wb: object | None = None) -> object:
+def _ole_rgb(r: int, g: int, b: int) -> int:
+    return int(r) + int(g) * 256 + int(b) * 65536
+
+
+def _load_picture(app_api: object, image_path: str, *, wb: object | None = None) -> object | None:
     path = str(Path(image_path).resolve())
     if wb is not None:
         try:
@@ -194,6 +198,11 @@ def _load_picture(app_api: object, image_path: str, *, wb: object | None = None)
         except Exception:
             pass
     try:
+        escaped = path.replace('"', '""')
+        return app_api.Evaluate(f'LoadPicture("{escaped}")')
+    except Exception:
+        pass
+    try:
         return app_api.LoadPicture(path)
     except Exception:
         pass
@@ -201,8 +210,22 @@ def _load_picture(app_api: object, image_path: str, *, wb: object | None = None)
         import win32com.client
 
         return win32com.client.Dispatch(app_api).LoadPicture(path)
-    except Exception as exc:
-        raise RuntimeError(f"LoadPicture({path}): {exc}") from exc
+    except Exception:
+        return None
+
+
+def _apply_command_button_picture(btn: object, image_path: str, app_api: object, *, wb: object | None) -> None:
+    pic = _load_picture(app_api, image_path, wb=wb)
+    if pic is not None:
+        btn.Picture = pic
+        return
+    # Запасной вид без bmp (если VBA/LoadPicture недоступны).
+    name = Path(image_path).name.casefold()
+    if "red" in name:
+        btn.BackColor = _ole_rgb(255, 0, 0)
+    elif "green" in name:
+        btn.BackColor = _ole_rgb(0, 128, 0)
+    btn.Caption = ""
 
 
 def _patch_path_auto_open_off(xlsm_path: Path) -> None:
@@ -326,7 +349,7 @@ def _sync_row_checkboxes_com(
                 height,
             )
             btn = ole.Object
-            btn.Picture = _load_picture(app_api, img, wb=wb)
+            _apply_command_button_picture(btn, img, app_api, wb=wb)
             btn.Caption = f"{prefix} {row} 0"
 
         color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD

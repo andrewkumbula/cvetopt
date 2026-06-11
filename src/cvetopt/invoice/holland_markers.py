@@ -6,10 +6,10 @@ from pathlib import Path
 
 from cvetopt.invoice.ecuador_create import (
     _CHECKBOX_BMPS,
+    _apply_command_button_picture,
     _copy_checkbox_assets,
     _delete_row_command_buttons,
     _ensure_picture_helper_vba,
-    _load_picture,
 )
 from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
@@ -158,6 +158,13 @@ Private Sub Workbook_Open()
 End Sub
 """
 
+_SHEET_ACTIVATE_VBA = """
+Private Sub Worksheet_Activate()
+    On Error Resume Next
+    Application.Run "cv_WireHollandMarkerButtons"
+End Sub
+"""
+
 _VBEXT_CT_DOCUMENT = 100
 
 
@@ -225,34 +232,53 @@ def _find_vb_component(vbproject: object, name: str) -> object:
     raise KeyError(name)
 
 
-def _find_this_workbook_component(vbproject: object) -> object:
+def _find_this_workbook_component(vbproject: object, wb: object) -> object | None:
+    workbook_names = frozenset({"thisworkbook", "этакнига"})
+    sheet_codes: set[str] = set()
+    for sht in wb.sheets:
+        try:
+            sheet_codes.add(str(sht.api.CodeName).casefold())
+        except Exception:
+            pass
     for i in range(1, int(vbproject.VBComponents.Count) + 1):
         comp = vbproject.VBComponents.Item(i)
         if int(comp.Type) != _VBEXT_CT_DOCUMENT:
             continue
+        if str(comp.Name).casefold() in workbook_names:
+            return comp
         try:
-            if str(comp.Properties("Name").Value) in ("ThisWorkbook", "ЭтаКнига"):
-                return comp
+            codename = str(comp.Properties("CodeName").Value).casefold()
         except Exception:
-            pass
+            codename = str(comp.Name).casefold()
+        if codename in workbook_names:
+            return comp
+        if codename in sheet_codes:
+            continue
     for name in ("ThisWorkbook", "ЭтаКнига"):
         try:
             return _find_vb_component(vbproject, name)
         except KeyError:
             continue
-    raise KeyError("ThisWorkbook")
+    return None
 
 
-def _ensure_workbook_open_wire(vbproject: object) -> None:
-    mod = _find_this_workbook_component(vbproject)
-    code_module = mod.CodeModule
+def _append_vba_hook(code_module: object, hook_code: str, marker: str) -> None:
     existing = code_module.Lines(1, code_module.CountOfLines) if code_module.CountOfLines else ""
-    if "cv_WireHollandMarkerButtons" in existing:
+    if marker in existing:
         return
     if code_module.CountOfLines:
-        code_module.InsertLines(code_module.CountOfLines + 1, _WORKBOOK_OPEN_VBA)
+        code_module.InsertLines(code_module.CountOfLines + 1, hook_code)
     else:
-        code_module.AddFromString(_WORKBOOK_OPEN_VBA)
+        code_module.AddFromString(hook_code)
+
+
+def _ensure_workbook_open_wire(vbproject: object, wb: object, sheet_codename: str) -> None:
+    mod = _find_this_workbook_component(vbproject, wb)
+    if mod is not None:
+        _append_vba_hook(mod.CodeModule, _WORKBOOK_OPEN_VBA, "cv_WireHollandMarkerButtons")
+        return
+    mod = _find_vb_component(vbproject, sheet_codename)
+    _append_vba_hook(mod.CodeModule, _SHEET_ACTIVATE_VBA, "cv_WireHollandMarkerButtons")
 
 
 def _missing_marker_assets(assets_dir: Path) -> list[str]:
@@ -319,7 +345,7 @@ def _sync_holland_markers_com(
                 float(cell.Height),
             )
             btn = ole.Object
-            btn.Picture = _load_picture(app_api, img, wb=wb)
+            _apply_command_button_picture(btn, img, app_api, wb=wb)
             btn.Caption = f"{prefix} {row} 0"
 
         color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
@@ -329,12 +355,34 @@ def _sync_holland_markers_com(
         ).Interior.Color = color
 
 
-def _inject_marker_vba(wb: object) -> None:
+def _inject_marker_vba(
+    wb: object,
+    sheet_codename: str,
+    *,
+    wire_clicks: bool = True,
+) -> list[str]:
     vb = wb.api.VBProject
-    _ensure_picture_helper_vba(wb)
-    _ensure_std_module(vb, _MARKER_MODULE, _CV_SYNC_VBA)
-    _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)
-    _ensure_workbook_open_wire(vb)
+    warnings: list[str] = []
+    steps: list[tuple[str, Callable[[], None]]] = [
+        ("picture helper", lambda: _ensure_picture_helper_vba(wb)),
+        ("markers module", lambda: _ensure_std_module(vb, _MARKER_MODULE, _CV_SYNC_VBA)),
+    ]
+    if wire_clicks:
+        steps.extend(
+            [
+                ("click class", lambda: _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)),
+                (
+                    "workbook open",
+                    lambda: _ensure_workbook_open_wire(vb, wb, sheet_codename),
+                ),
+            ]
+        )
+    for label, action in steps:
+        try:
+            action()
+        except Exception as e:
+            warnings.append(f"{label}: {e}")
+    return warnings
 
 
 def _wire_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
@@ -362,7 +410,10 @@ def _sync_holland_markers_vba(
     last_row: int,
     log: LogFn,
 ) -> bool:
-    _inject_marker_vba(wb)
+    last_err: Exception | None = None
+    sheet_codename = str(wb.sheets[0].api.CodeName)
+    for warn in _inject_marker_vba(wb, sheet_codename, wire_clicks=False):
+        log(f"Голландия: VBA inject — {warn}")
     specs = (
         f"{_MARKER_MODULE}.{_CV_SYNC_MACRO}",
         _CV_SYNC_MACRO,
@@ -425,6 +476,7 @@ def add_holland_row_markers(
         app.api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
         wb = app.books.open(str(export_path), update_links=False)
         ws = wb.sheets[0]
+        sheet_codename = str(ws.api.CodeName)
         need_insert = export_path.suffix.lower() == ".xlsx" and not _marker_columns_already(ws)
         if need_insert:
             ws.api.Columns("A:B").Insert()
@@ -474,8 +526,9 @@ def add_holland_row_markers(
                 "Проверьте bmp рядом с файлом и «Доверять доступ к VBA» в Excel."
             )
 
+        for warn in _inject_marker_vba(wb, sheet_codename, wire_clicks=True):
+            _lg(f"Голландия: VBA inject — {warn}")
         try:
-            _inject_marker_vba(wb)
             _wire_marker_clicks(app, wb, log=_lg)
         except Exception as e:
             _lg(f"Голландия: клики по маркерам могут не работать — {e}")
