@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from cvetopt.invoice.ecuador_create import _CHECKBOX_BMPS, _copy_checkbox_assets
+from cvetopt.invoice.ecuador_create import (
+    _CHECKBOX_BMPS,
+    _copy_checkbox_assets,
+    _delete_row_command_buttons,
+    _load_picture,
+)
 from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
 LogFn = Callable[[str], None]
@@ -26,7 +30,7 @@ Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
     Dim aCommandButton As MSForms.CommandButton
     Dim aSheet As Worksheet
     Dim aLastCol As Long
-    Set aSheet = ActiveSheet
+    Set aSheet = ThisWorkbook.Worksheets(1)
     Application.ScreenUpdating = False
     Call cvDelHollandMarkerButtons(aSheet.Name)
     aLastCol = aSheet.Range("C1").End(xlToRight).Column
@@ -78,7 +82,7 @@ Public Sub cv_WireHollandMarkerButtons()
     Dim h As cvHollandMarkerHandler
     On Error Resume Next
     Set ColHollandButtons = New Collection
-    For Each aButton In ActiveSheet.OLEObjects
+    For Each aButton In ThisWorkbook.Worksheets(1).OLEObjects
         If TypeOf aButton.Object Is MSForms.CommandButton Then
             Set h = New cvHollandMarkerHandler
             Set h.EventButton = aButton.Object
@@ -99,7 +103,7 @@ Private Sub EventButton_Click()
     Dim aStr As String
     Dim aAddress As String
     Dim aSheet As Worksheet
-    Set aSheet = ActiveSheet
+    Set aSheet = ThisWorkbook.Worksheets(1)
     With EventButton
         If Left(.Caption, 1) = "1" Then
             If Right(.Caption, 1) = "0" Then
@@ -215,6 +219,126 @@ def _missing_marker_assets(assets_dir: Path) -> list[str]:
     return [name for name in _CHECKBOX_BMPS if not (assets_dir / name).is_file()]
 
 
+def _holland_last_col(sheet: object) -> int:
+    return int(sheet.api.Range("C1").End(-4161).Column)  # xlToRight
+
+
+def _count_marker_buttons(sheet: object) -> int:
+    count = 0
+    oles = sheet.api.OLEObjects()
+    for i in range(1, int(oles.Count) + 1):
+        try:
+            if "CommandButton" in str(oles.Item(i).ClassType):
+                count += 1
+        except Exception:
+            pass
+    return count
+
+
+def _marker_columns_already(ws: object) -> bool:
+    """Колонки A–B уже вставлены (повторный прогон)."""
+    try:
+        header = str(ws.range("C1").value or "").strip().casefold()
+        if header.startswith("box"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _sync_holland_markers_com(
+    wb: object,
+    sheet: object,
+    *,
+    first_row: int,
+    last_row: int,
+    assets_dir: Path,
+) -> None:
+    red_img = str((assets_dir / "Red_Check_Off.bmp").resolve())
+    green_img = str((assets_dir / "Green_Check_Off.bmp").resolve())
+    if not Path(red_img).is_file() or not Path(green_img).is_file():
+        raise FileNotFoundError(f"Нет bmp в {assets_dir}")
+
+    app_api = wb.app.api
+    sheet.api.Columns("A:A").ColumnWidth = 2.2
+    sheet.api.Columns("B:B").ColumnWidth = 2.2
+    _delete_row_command_buttons(sheet)
+    last_col = _holland_last_col(sheet)
+
+    for row in range(first_row, last_row + 1):
+        for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
+            cell = sheet.api.Cells(row, col)
+            ole = sheet.api.OLEObjects().Add(
+                "Forms.CommandButton.1",
+                "",
+                False,
+                False,
+                float(cell.Left),
+                float(cell.Top),
+                float(cell.Width),
+                float(cell.Height),
+            )
+            btn = ole.Object
+            btn.Picture = _load_picture(app_api, img)
+            btn.Caption = f"{prefix} {row} 0"
+
+        color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
+        sheet.api.Range(
+            sheet.api.Cells(row, 3),
+            sheet.api.Cells(row, last_col),
+        ).Interior.Color = color
+
+
+def _inject_marker_vba(wb: object, sheet_codename: str) -> None:
+    vb = wb.api.VBProject
+    _ensure_std_module(vb, _MARKER_MODULE, _CV_SYNC_VBA)
+    _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)
+    _ensure_sheet_activate(vb, sheet_codename)
+
+
+def _wire_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
+    specs = (
+        f"{_MARKER_MODULE}.{_CV_WIRE_MACRO}",
+        _CV_WIRE_MACRO,
+        f"'{wb.name}'!{_CV_WIRE_MACRO}",
+    )
+    last_err: Exception | None = None
+    for spec in specs:
+        try:
+            app.api.Run(spec)
+            log("Голландия: обработчики кликов подключены (VBA).")
+            return
+        except Exception as e:
+            last_err = e
+    log(f"Голландия: клики по маркерам — без VBA ({last_err})")
+
+
+def _sync_holland_markers_vba(
+    app: object,
+    wb: object,
+    *,
+    first_row: int,
+    last_row: int,
+    sheet_codename: str,
+    log: LogFn,
+) -> bool:
+    _inject_marker_vba(wb, sheet_codename)
+    specs = (
+        f"{_MARKER_MODULE}.{_CV_SYNC_MACRO}",
+        _CV_SYNC_MACRO,
+        f"'{wb.name}'!{_CV_SYNC_MACRO}",
+    )
+    for spec in specs:
+        try:
+            app.api.Run(spec, first_row, last_row)
+            log("Голландия: маркеры созданы (VBA).")
+            return True
+        except Exception as e:
+            last_err = e
+    log(f"Голландия: VBA маркеры не запустились — {last_err}")
+    return False
+
+
 def add_holland_row_markers(
     export_path: Path,
     assets_dir: Path,
@@ -247,7 +371,8 @@ def add_holland_row_markers(
         _lg("Голландия: маркеры пропущены — нет строк данных.")
         return export_path
 
-    _copy_checkbox_assets(assets_dir, export_path.parent)
+    assets_target = export_path.parent
+    _copy_checkbox_assets(assets_dir, assets_target)
     xlsm_path = export_path.with_suffix(".xlsm")
 
     import xlwings as xw
@@ -262,25 +387,61 @@ def add_holland_row_markers(
         ws = wb.sheets[0]
         sheet_codename = str(ws.api.CodeName)
 
-        if export_path.suffix.lower() == ".xlsx":
+        need_insert = export_path.suffix.lower() == ".xlsx" and not _marker_columns_already(ws)
+        if need_insert:
             ws.api.Columns("A:B").Insert()
-        ws.api.Columns("A:A").ColumnWidth = 2.2
-        ws.api.Columns("B:B").ColumnWidth = 2.2
+        elif _marker_columns_already(ws):
+            _lg("Голландия: колонки A–B уже есть — только маркеры.")
 
         if export_path.suffix.lower() == ".xlsx":
             wb.api.SaveAs(str(xlsm_path), FileFormat=52)
         else:
             xlsm_path = export_path
 
-        vb = wb.api.VBProject
-        _ensure_std_module(vb, _MARKER_MODULE, _CV_SYNC_VBA)
-        _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)
-        _ensure_sheet_activate(vb, sheet_codename)
+        assets_target = xlsm_path.parent
+        _copy_checkbox_assets(assets_dir, assets_target)
 
-        app.api.Run(f"{_MARKER_MODULE}.{_CV_SYNC_MACRO}", _HOLLAND_DATA_FIRST_ROW, last_row)
+        vba_ok = False
+        try:
+            vba_ok = _sync_holland_markers_vba(
+                app,
+                wb,
+                first_row=_HOLLAND_DATA_FIRST_ROW,
+                last_row=last_row,
+                sheet_codename=sheet_codename,
+                log=_lg,
+            )
+        except Exception as e:
+            _lg(f"Голландия: VBA недоступен ({e})")
+
+        if not vba_ok or _count_marker_buttons(ws) < (last_row - _HOLLAND_DATA_FIRST_ROW + 1):
+            _lg("Голландия: маркеры через COM…")
+            _sync_holland_markers_com(
+                wb,
+                ws,
+                first_row=_HOLLAND_DATA_FIRST_ROW,
+                last_row=last_row,
+                assets_dir=assets_target,
+            )
+
+        btn_count = _count_marker_buttons(ws)
+        expected = (last_row - _HOLLAND_DATA_FIRST_ROW + 1) * 2
+        if btn_count < expected:
+            raise RuntimeError(
+                f"Создано кнопок {btn_count} из {expected}. "
+                "Проверьте bmp рядом с файлом и доверие VBA в Excel."
+            )
+
+        try:
+            _inject_marker_vba(wb, sheet_codename)
+            _wire_marker_clicks(app, wb, log=_lg)
+        except Exception as e:
+            _lg(f"Голландия: клики по маркерам могут не работать — {e}")
+
         wb.save()
         _lg(
-            f"Голландия: маркеры (кол. A–B) для строк {_HOLLAND_DATA_FIRST_ROW}–{last_row} → {xlsm_path.name}"
+            f"Голландия: маркеры {btn_count} кн., строки "
+            f"{_HOLLAND_DATA_FIRST_ROW}–{last_row} → {xlsm_path.name}"
         )
         if export_path.suffix.lower() == ".xlsx" and export_path.exists():
             try:
