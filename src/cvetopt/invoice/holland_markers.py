@@ -25,7 +25,6 @@ _CV_CLICK_MACRO = "cvHollandMarkerClick"
 _MARKER_MODULE = "cvHollandMarkers"
 _OBSOLETE_MARKER_CLASS = "cvHollandMarkerHandler"
 _XL_BUTTON_CONTROL = 0
-_MSO_FORM_CONTROL = 12
 
 _CV_SYNC_VBA = """
 Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
@@ -72,7 +71,7 @@ Public Sub cvDelHollandMarkerButtons(aSheet As String)
     Set ws = ThisWorkbook.Sheets(aSheet)
     For i = ws.Shapes.Count To 1 Step -1
         Set shp = ws.Shapes(i)
-        If shp.Type = 12 And shp.FormControlType = 0 Then
+        If shp.FormControlType = 0 Then
             If Left(shp.Name, 3) = "cvM" Then shp.Delete
         End If
     Next i
@@ -172,6 +171,7 @@ def _ensure_std_module(vbproject: object, name: str, code: str) -> None:
         _CV_SYNC_MACRO in existing
         and _CV_CLICK_MACRO in existing
         and "MSForms" not in existing
+        and "Type = 12" not in existing
     ):
         return
     if code_module.CountOfLines:
@@ -192,9 +192,8 @@ def _delete_holland_marker_buttons(sheet: object) -> None:
     for i in range(int(shapes.Count), 0, -1):
         shp = shapes.Item(i)
         try:
-            if int(shp.Type) == _MSO_FORM_CONTROL and int(shp.FormControlType) == _XL_BUTTON_CONTROL:
-                if str(shp.Name).startswith("cvM"):
-                    shp.Delete()
+            if _is_holland_marker_shape(shp):
+                shp.Delete()
         except Exception:
             pass
     _delete_row_command_buttons(sheet)
@@ -225,15 +224,30 @@ def _add_form_marker_button(
     shp.Line.Visible = False
 
 
+def _is_holland_marker_shape(shp: object) -> bool:
+    try:
+        if int(shp.FormControlType) != _XL_BUTTON_CONTROL:
+            return False
+    except Exception:
+        return False
+    name = str(shp.Name)
+    if name.startswith("cvM"):
+        return True
+    try:
+        cap = str(shp.TextFrame.Characters().Text or "").strip()
+    except Exception:
+        cap = ""
+    return len(cap) >= 3 and cap[0] in "12" and cap[1] == " "
+
+
 def _count_marker_buttons(sheet: object) -> int:
     count = 0
     shapes = sheet.api.Shapes
     for i in range(1, int(shapes.Count) + 1):
         try:
             shp = shapes.Item(i)
-            if int(shp.Type) == _MSO_FORM_CONTROL and int(shp.FormControlType) == _XL_BUTTON_CONTROL:
-                if str(shp.Name).startswith("cvM"):
-                    count += 1
+            if _is_holland_marker_shape(shp):
+                count += 1
         except Exception:
             pass
     if count:
@@ -268,7 +282,7 @@ def _sync_holland_markers_com(
     assets_dir: Path,
 ) -> None:
     del assets_dir
-    click_macro = f"{_MARKER_MODULE}.{_CV_CLICK_MACRO}"
+    click_macro = _CV_CLICK_MACRO
     sheet.api.Columns("A:A").ColumnWidth = 2.2
     sheet.api.Columns("B:B").ColumnWidth = 2.2
     _delete_holland_marker_buttons(sheet)
@@ -420,7 +434,8 @@ def add_holland_row_markers(
             _lg(f"Голландия: VBA недоступен ({e})")
 
         expected = (last_row - _HOLLAND_DATA_FIRST_ROW + 1) * 2
-        if not vba_ok or _count_marker_buttons(ws) < expected:
+        btn_count = _count_marker_buttons(ws)
+        if not vba_ok and btn_count < expected:
             _lg("Голландия: маркеры через COM…")
             for warn in _inject_marker_vba(wb):
                 _lg(f"Голландия: VBA inject — {warn}")
@@ -431,8 +446,12 @@ def add_holland_row_markers(
                 last_row=last_row,
                 assets_dir=assets_target,
             )
-
-        btn_count = _count_marker_buttons(ws)
+            btn_count = _count_marker_buttons(ws)
+        elif vba_ok and btn_count < expected:
+            _lg(
+                f"Голландия: VBA отработал, в подсчёте {btn_count}/{expected} кн. "
+                "— сохраняем без повторного COM."
+            )
         if btn_count < expected:
             raise RuntimeError(
                 f"Создано кнопок {btn_count} из {expected}. "
