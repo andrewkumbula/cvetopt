@@ -25,6 +25,7 @@ _CV_CLICK_MACRO = "cvHollandMarkerClick"
 _MARKER_MODULE = "cvHollandMarkers"
 _OBSOLETE_MARKER_CLASS = "cvHollandMarkerHandler"
 _XL_BUTTON_CONTROL = 0
+_XL_PASTE_VALUES = -4163
 
 _CV_SYNC_VBA = """
 Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
@@ -36,8 +37,8 @@ Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
     Call cvDelHollandMarkerButtons(aSheet.Name)
     aLastCol = aSheet.Range("C1").End(xlToRight).Column
     With aSheet
-        .Columns("A:A").ColumnWidth = 2.2
-        .Columns("B:B").ColumnWidth = 2.2
+        .Columns("A:A").ColumnWidth = 3.5
+        .Columns("B:B").ColumnWidth = 3.5
         For aI = aFirst To aLast
             Call cvAddHollandMarkerBtn(aSheet, aI, 1, "1", RGB(255, 0, 0))
             Call cvAddHollandMarkerBtn(aSheet, aI, 2, "2", RGB(0, 128, 0))
@@ -55,9 +56,9 @@ Private Sub cvAddHollandMarkerBtn(aSheet As Worksheet, aRow As Long, aCol As Lon
     Dim cell As Range
     Set cell = aSheet.Cells(aRow, aCol)
     Set btn = aSheet.Shapes.AddFormControl(0, cell.Left, cell.Top, cell.Width, cell.Height)
-    btn.Name = "cvM" & aPrefix & aRow
+    btn.Name = "cvM_" & aPrefix & "_" & aRow & "_0"
     btn.OnAction = "cvHollandMarkerClick"
-    btn.TextFrame.Characters.Text = aPrefix & " " & aRow & " 0"
+    btn.TextFrame.Characters.Text = ""
     btn.Fill.Visible = True
     btn.Fill.ForeColor.RGB = aColor
     btn.Line.Visible = False
@@ -84,52 +85,46 @@ End Sub
 
 Public Sub cvHollandMarkerClick()
     Dim btn As Shape
-    Dim cap As String
-    Dim aStr As String
+    Dim parts() As String
+    Dim aPrefix As String
+    Dim aRow As Long
+    Dim aState As String
     Dim aAddress As String
     Dim aSheet As Worksheet
     Set aSheet = ThisWorkbook.Worksheets(1)
     Set btn = aSheet.Shapes(CStr(Application.Caller))
-    cap = btn.TextFrame.Characters.Text
-    If Left(cap, 1) = "1" Then
-        If Right(cap, 1) = "0" Then
+    parts = Split(btn.Name, "_")
+    If UBound(parts) < 3 Then Exit Sub
+    aPrefix = parts(1)
+    aRow = CLng(parts(2))
+    aState = parts(3)
+    If aPrefix = "1" Then
+        If aState = "0" Then
             btn.Fill.ForeColor.RGB = RGB(200, 0, 0)
-            aStr = cap
-            aStr = Right(aStr, Len(aStr) - 2)
-            aStr = Left(aStr, Len(aStr) - 2)
-            aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
+            aAddress = aSheet.Cells(aRow, aSheet.Range("C1").End(xlToRight).Column). _
                 Address(RowAbsolute:=False, ColumnAbsolute:=False)
-            aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 209, 209)
-            btn.TextFrame.Characters.Text = Left(cap, Len(cap) - 1) & "1"
+            aSheet.Range("C" & aRow & ":" & aAddress).Interior.Color = RGB(255, 209, 209)
+            btn.Name = "cvM_1_" & aRow & "_1"
         Else
             btn.Fill.ForeColor.RGB = RGB(255, 0, 0)
-            aStr = cap
-            aStr = Right(aStr, Len(aStr) - 2)
-            aStr = Left(aStr, Len(aStr) - 2)
-            aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
+            aAddress = aSheet.Cells(aRow, aSheet.Range("C1").End(xlToRight).Column). _
                 Address(RowAbsolute:=False, ColumnAbsolute:=False)
-            aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 255, 255)
-            btn.TextFrame.Characters.Text = Left(cap, Len(cap) - 1) & "0"
+            aSheet.Range("C" & aRow & ":" & aAddress).Interior.Color = RGB(255, 255, 255)
+            btn.Name = "cvM_1_" & aRow & "_0"
         End If
-    ElseIf Left(cap, 1) = "2" Then
-        If Right(cap, 1) = "0" Then
+    ElseIf aPrefix = "2" Then
+        If aState = "0" Then
             btn.Fill.ForeColor.RGB = RGB(0, 200, 0)
-            aStr = cap
-            aStr = Right(aStr, Len(aStr) - 2)
-            aStr = Left(aStr, Len(aStr) - 2)
-            aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
+            aAddress = aSheet.Cells(aRow, aSheet.Range("C1").End(xlToRight).Column). _
                 Address(RowAbsolute:=False, ColumnAbsolute:=False)
-            aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(0, 255, 0)
-            btn.TextFrame.Characters.Text = Left(cap, Len(cap) - 1) & "1"
+            aSheet.Range("C" & aRow & ":" & aAddress).Interior.Color = RGB(0, 255, 0)
+            btn.Name = "cvM_2_" & aRow & "_1"
         Else
             btn.Fill.ForeColor.RGB = RGB(0, 128, 0)
-            aStr = cap
-            aStr = Right(aStr, Len(aStr) - 2)
-            aStr = Left(aStr, Len(aStr) - 2)
-            aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
+            aAddress = aSheet.Cells(aRow, aSheet.Range("C1").End(xlToRight).Column). _
                 Address(RowAbsolute:=False, ColumnAbsolute:=False)
-            aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 255, 255)
-            btn.TextFrame.Characters.Text = Left(cap, Len(cap) - 1) & "0"
+            aSheet.Range("C" & aRow & ":" & aAddress).Interior.Color = RGB(255, 255, 255)
+            btn.Name = "cvM_2_" & aRow & "_0"
         End If
     End If
 End Sub
@@ -172,11 +167,23 @@ def _ensure_std_module(vbproject: object, name: str, code: str) -> None:
         and _CV_CLICK_MACRO in existing
         and "MSForms" not in existing
         and "Type = 12" not in existing
+        and 'btn.Name = "cvM_"' in existing
     ):
         return
     if code_module.CountOfLines:
         code_module.DeleteLines(1, code_module.CountOfLines)
     code_module.AddFromString(code)
+
+
+def _freeze_sheet_values(ws: object) -> None:
+    """Формулы btnExport2 (ссылки на Auto_new.xls) → значения до вставки колонок A–B."""
+    used = ws.api.UsedRange
+    if used is None:
+        return
+    app_api = ws.api.Application
+    used.Copy()
+    used.PasteSpecial(Paste=_XL_PASTE_VALUES)
+    app_api.CutCopyMode = False
 
 
 def _missing_marker_assets(assets_dir: Path) -> list[str]:
@@ -216,9 +223,9 @@ def _add_form_marker_button(
         float(cell.Width),
         float(cell.Height),
     )
-    shp.Name = f"cvM{prefix}{row}"
+    shp.Name = f"cvM_{prefix}_{row}_0"
     shp.OnAction = macro
-    shp.TextFrame.Characters().Text = f"{prefix} {row} 0"
+    shp.TextFrame.Characters().Text = ""
     shp.Fill.Visible = True
     shp.Fill.ForeColor.RGB = color_rgb
     shp.Line.Visible = False
@@ -231,13 +238,7 @@ def _is_holland_marker_shape(shp: object) -> bool:
     except Exception:
         return False
     name = str(shp.Name)
-    if name.startswith("cvM"):
-        return True
-    try:
-        cap = str(shp.TextFrame.Characters().Text or "").strip()
-    except Exception:
-        cap = ""
-    return len(cap) >= 3 and cap[0] in "12" and cap[1] == " "
+    return name.startswith("cvM_") or name.startswith("cvM")
 
 
 def _count_marker_buttons(sheet: object) -> int:
@@ -283,8 +284,8 @@ def _sync_holland_markers_com(
 ) -> None:
     del assets_dir
     click_macro = _CV_CLICK_MACRO
-    sheet.api.Columns("A:A").ColumnWidth = 2.2
-    sheet.api.Columns("B:B").ColumnWidth = 2.2
+    sheet.api.Columns("A:A").ColumnWidth = 3.5
+    sheet.api.Columns("B:B").ColumnWidth = 3.5
     _delete_holland_marker_buttons(sheet)
     last_col = _holland_last_col(sheet)
 
@@ -402,6 +403,8 @@ def add_holland_row_markers(
         app.api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
         wb = app.books.open(str(export_path), update_links=False)
         ws = wb.sheets[0]
+        _freeze_sheet_values(ws)
+        _lg("Голландия: формулы заменены значениями (без #ССЫЛКА!).")
         need_insert = export_path.suffix.lower() == ".xlsx" and not _marker_columns_already(ws)
         if need_insert:
             ws.api.Columns("A:B").Insert()

@@ -41,7 +41,7 @@ async def run_auto1_pipeline_job(job_id: str, env: EnvSettings) -> None:
         await job_log(job_id, msg)
 
     await lg(
-        "Auto1: Scan → Import → Calculate → Sort → for sklad "
+        "Auto1: Scan → Import → Calculate → Sort (Python) → for sklad "
         f"(лист {cfg.sheet_name!r})"
     )
 
