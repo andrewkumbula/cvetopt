@@ -324,12 +324,13 @@ def _freeze_sheet_values(ws: object, *, app: object | None = None, recalc: bool 
         except Exception:
             pass
         _calculate_workbook(app)
-    _break_external_links(wb_api)
+    # Сначала фиксируем вычисленные значения (пока Auto_new открыт и ссылки живы),
+    # и только потом рвём ссылки — иначе BreakLink превратит Quant в #ССЫЛКА!.
     used = ws.api.UsedRange
-    if used is None:
-        return
-    used.Value = used.Value2
-    ws.api.Application.CutCopyMode = False
+    if used is not None:
+        used.Value = used.Value2
+        ws.api.Application.CutCopyMode = False
+    _break_external_links(wb_api)
 
 
 def _delete_export_checkboxes(sheet: object) -> int:
