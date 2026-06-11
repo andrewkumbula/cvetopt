@@ -162,10 +162,54 @@ def _prepare_work_copy(template: Path) -> Path:
 
 _PICTURE_HELPER_MODULE = "cvPictureHelper"
 _PICTURE_HELPER_VBA = """
-Public Function cv_LoadPicture(path As String) As stdole.IPictureDisp
+Public Function cv_LoadPicture(path As String)
     Set cv_LoadPicture = LoadPicture(path)
 End Function
 """
+
+_MSFORMS_GUID = "{0D452EE1-E08F-101A-8523-02608C4D0BB4}"
+
+
+def _vb_has_reference(vbproject: object, hint: str) -> bool:
+    hint_cf = hint.casefold()
+    refs = vbproject.References
+    for i in range(1, int(refs.Count) + 1):
+        ref = refs.Item(i)
+        for attr in ("Name", "Description", "FullPath"):
+            try:
+                if hint_cf in str(getattr(ref, attr, "")).casefold():
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+def _ensure_msforms_reference(vbproject: object) -> None:
+    """Нужен для MSForms.CommandButton и WithEvents в инжектируемом VBA."""
+    if _vb_has_reference(vbproject, "Forms"):
+        return
+    try:
+        vbproject.References.AddFromGuid(_MSFORMS_GUID, 2, 0)
+        return
+    except Exception:
+        pass
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    for fm20 in (system_root / "SysWOW64" / "FM20.DLL", system_root / "System32" / "FM20.DLL"):
+        if not fm20.is_file():
+            continue
+        try:
+            vbproject.References.AddFromFile(str(fm20))
+            return
+        except Exception:
+            continue
+    raise RuntimeError(
+        "Не удалось подключить Microsoft Forms 2.0 (FM20.DLL). "
+        "Нужно для CommandButton в VBA-маркерах."
+    )
+
+
+def ensure_vba_references(vbproject: object) -> None:
+    _ensure_msforms_reference(vbproject)
 
 
 def _ensure_picture_helper_vba(wb: object) -> None:
@@ -358,7 +402,9 @@ def _sync_row_checkboxes_com(
 
 def _ensure_cv_sync_macro(wb: object) -> None:
     """Public-макрос в Module1 (как SetCommandButton, без вставки колонки A)."""
-    mod = wb.api.VBProject.VBComponents("Module1").CodeModule
+    vb = wb.api.VBProject
+    ensure_vba_references(vb)
+    mod = vb.VBComponents("Module1").CodeModule
     line_count = int(mod.CountOfLines)
     existing = mod.Lines(1, line_count) if line_count else ""
     if f"Sub {_CV_SYNC_MACRO}" in existing:

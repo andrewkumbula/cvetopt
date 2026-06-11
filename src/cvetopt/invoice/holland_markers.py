@@ -6,10 +6,10 @@ from pathlib import Path
 
 from cvetopt.invoice.ecuador_create import (
     _CHECKBOX_BMPS,
-    _apply_command_button_picture,
     _copy_checkbox_assets,
     _delete_row_command_buttons,
     _ensure_picture_helper_vba,
+    _ole_rgb,
 )
 from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
@@ -21,14 +21,15 @@ _ZEBRA_EVEN = 12379351
 _ZEBRA_ODD = 9944773
 
 _CV_SYNC_MACRO = "cv_SyncHollandMarkers"
-_CV_WIRE_MACRO = "cv_WireHollandMarkerButtons"
+_CV_CLICK_MACRO = "cvHollandMarkerClick"
 _MARKER_MODULE = "cvHollandMarkers"
-_MARKER_CLASS = "cvHollandMarkerHandler"
+_OBSOLETE_MARKER_CLASS = "cvHollandMarkerHandler"
+_XL_BUTTON_CONTROL = 0
+_MSO_FORM_CONTROL = 12
 
 _CV_SYNC_VBA = """
 Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
     Dim aI As Long
-    Dim aCommandButton As MSForms.CommandButton
     Dim aSheet As Worksheet
     Dim aLastCol As Long
     Set aSheet = ThisWorkbook.Worksheets(1)
@@ -39,24 +40,8 @@ Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
         .Columns("A:A").ColumnWidth = 2.2
         .Columns("B:B").ColumnWidth = 2.2
         For aI = aFirst To aLast
-            Set aCommandButton = .OLEObjects.Add(ClassType:="Forms.CommandButton.1").Object
-            With aCommandButton
-                .Left = aSheet.Cells(aI, 1).Left
-                .Top = aSheet.Cells(aI, 1).Top
-                .Width = aSheet.Cells(aI, 1).Width
-                .Height = aSheet.Cells(aI, 1).Height
-                .Picture = LoadPicture(ThisWorkbook.Path & "\\" & "Red_Check_Off.bmp")
-                .Caption = "1 " & Trim(Str(aI)) & " 0"
-            End With
-            Set aCommandButton = .OLEObjects.Add(ClassType:="Forms.CommandButton.1").Object
-            With aCommandButton
-                .Left = aSheet.Cells(aI, 2).Left
-                .Top = aSheet.Cells(aI, 2).Top
-                .Width = aSheet.Cells(aI, 2).Width
-                .Height = aSheet.Cells(aI, 2).Height
-                .Picture = LoadPicture(ThisWorkbook.Path & "\\" & "Green_Check_Off.bmp")
-                .Caption = "2 " & Trim(Str(aI)) & " 0"
-            End With
+            Call cvAddHollandMarkerBtn(aSheet, aI, 1, "1", RGB(255, 0, 0))
+            Call cvAddHollandMarkerBtn(aSheet, aI, 2, "2", RGB(0, 128, 0))
             If (aI Mod 2) = 0 Then
                 .Range(.Cells(aI, 3), .Cells(aI, aLastCol)).Interior.Color = 12379351
             Else
@@ -64,108 +49,92 @@ Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
             End If
         Next aI
     End With
-    Call cv_WireHollandMarkerButtons
+End Sub
+
+Private Sub cvAddHollandMarkerBtn(aSheet As Worksheet, aRow As Long, aCol As Long, aPrefix As String, aColor As Long)
+    Dim btn As Shape
+    Dim cell As Range
+    Set cell = aSheet.Cells(aRow, aCol)
+    Set btn = aSheet.Shapes.AddFormControl(0, cell.Left, cell.Top, cell.Width, cell.Height)
+    btn.Name = "cvM" & aPrefix & aRow
+    btn.OnAction = "cvHollandMarkerClick"
+    btn.TextFrame.Characters.Text = aPrefix & " " & aRow & " 0"
+    btn.Fill.Visible = True
+    btn.Fill.ForeColor.RGB = aColor
+    btn.Line.Visible = False
 End Sub
 
 Public Sub cvDelHollandMarkerButtons(aSheet As String)
+    Dim ws As Worksheet
+    Dim shp As Shape
     Dim aButton As OLEObject
-    For Each aButton In ThisWorkbook.Sheets(aSheet).OLEObjects
-        If TypeOf aButton.Object Is MSForms.CommandButton Then
+    Dim i As Long
+    Set ws = ThisWorkbook.Sheets(aSheet)
+    For i = ws.Shapes.Count To 1 Step -1
+        Set shp = ws.Shapes(i)
+        If shp.Type = 12 And shp.FormControlType = 0 Then
+            If Left(shp.Name, 3) = "cvM" Then shp.Delete
+        End If
+    Next i
+    For Each aButton In ws.OLEObjects
+        If InStr(1, aButton.ClassType, "CommandButton", vbTextCompare) > 0 Then
             aButton.Delete
         End If
     Next
 End Sub
 
-Public ColHollandButtons As Collection
-
-Public Sub cv_WireHollandMarkerButtons()
-    Dim aButton As OLEObject
-    Dim h As cvHollandMarkerHandler
-    On Error Resume Next
-    Set ColHollandButtons = New Collection
-    For Each aButton In ThisWorkbook.Worksheets(1).OLEObjects
-        If TypeOf aButton.Object Is MSForms.CommandButton Then
-            Set h = New cvHollandMarkerHandler
-            Set h.EventButton = aButton.Object
-            ColHollandButtons.Add h
-        End If
-    Next
-End Sub
-"""
-
-_MARKER_CLASS_VBA = """
-Public WithEvents EventButton As MSForms.CommandButton
-
-Private Function _holland_marker_bmp(name As String) As String
-    _holland_marker_bmp = ThisWorkbook.Path & "\\" & name
-End Function
-
-Private Sub EventButton_Click()
+Public Sub cvHollandMarkerClick()
+    Dim btn As Shape
+    Dim cap As String
     Dim aStr As String
     Dim aAddress As String
     Dim aSheet As Worksheet
     Set aSheet = ThisWorkbook.Worksheets(1)
-    With EventButton
-        If Left(.Caption, 1) = "1" Then
-            If Right(.Caption, 1) = "0" Then
-                .Picture = LoadPicture(_holland_marker_bmp("Red_Check_On.bmp"))
-                aStr = .Caption
-                aStr = Right(aStr, Len(aStr) - 2)
-                aStr = Left(aStr, Len(aStr) - 2)
-                aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
-                    Address(RowAbsolute:=False, ColumnAbsolute:=False)
-                aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 209, 209)
-                .Caption = Left(.Caption, Len(.Caption) - 2) & " 1"
-            Else
-                .Picture = LoadPicture(_holland_marker_bmp("Red_Check_Off.bmp"))
-                aStr = .Caption
-                aStr = Right(aStr, Len(aStr) - 2)
-                aStr = Left(aStr, Len(aStr) - 2)
-                aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
-                    Address(RowAbsolute:=False, ColumnAbsolute=False)
-                aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 255, 255)
-                .Caption = Left(.Caption, Len(.Caption) - 2) & " 0"
-            End If
-        ElseIf Left(.Caption, 1) = "2" Then
-            If Right(.Caption, 1) = "0" Then
-                .Picture = LoadPicture(_holland_marker_bmp("Green_Check_On.bmp"))
-                aStr = .Caption
-                aStr = Right(aStr, Len(aStr) - 2)
-                aStr = Left(aStr, Len(aStr) - 2)
-                aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
-                    Address(RowAbsolute:=False, ColumnAbsolute:=False)
-                aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(0, 255, 0)
-                .Caption = Left(.Caption, Len(.Caption) - 2) & " 1"
-            Else
-                .Picture = LoadPicture(_holland_marker_bmp("Green_Check_Off.bmp"))
-                aStr = .Caption
-                aStr = Right(aStr, Len(aStr) - 2)
-                aStr = Left(aStr, Len(aStr) - 2)
-                aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
-                    Address(RowAbsolute:=False, ColumnAbsolute:=False)
-                aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 255, 255)
-                .Caption = Left(.Caption, Len(.Caption) - 2) & " 0"
-            End If
+    Set btn = aSheet.Shapes(CStr(Application.Caller))
+    cap = btn.TextFrame.Characters.Text
+    If Left(cap, 1) = "1" Then
+        If Right(cap, 1) = "0" Then
+            btn.Fill.ForeColor.RGB = RGB(200, 0, 0)
+            aStr = cap
+            aStr = Right(aStr, Len(aStr) - 2)
+            aStr = Left(aStr, Len(aStr) - 2)
+            aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
+                Address(RowAbsolute:=False, ColumnAbsolute:=False)
+            aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 209, 209)
+            btn.TextFrame.Characters.Text = Left(cap, Len(cap) - 1) & "1"
+        Else
+            btn.Fill.ForeColor.RGB = RGB(255, 0, 0)
+            aStr = cap
+            aStr = Right(aStr, Len(aStr) - 2)
+            aStr = Left(aStr, Len(aStr) - 2)
+            aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
+                Address(RowAbsolute:=False, ColumnAbsolute:=False)
+            aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 255, 255)
+            btn.TextFrame.Characters.Text = Left(cap, Len(cap) - 1) & "0"
         End If
-    End With
+    ElseIf Left(cap, 1) = "2" Then
+        If Right(cap, 1) = "0" Then
+            btn.Fill.ForeColor.RGB = RGB(0, 200, 0)
+            aStr = cap
+            aStr = Right(aStr, Len(aStr) - 2)
+            aStr = Left(aStr, Len(aStr) - 2)
+            aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
+                Address(RowAbsolute:=False, ColumnAbsolute:=False)
+            aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(0, 255, 0)
+            btn.TextFrame.Characters.Text = Left(cap, Len(cap) - 1) & "1"
+        Else
+            btn.Fill.ForeColor.RGB = RGB(0, 128, 0)
+            aStr = cap
+            aStr = Right(aStr, Len(aStr) - 2)
+            aStr = Left(aStr, Len(aStr) - 2)
+            aAddress = aSheet.Cells(CInt(aStr), aSheet.Range("C1").End(xlToRight).Column). _
+                Address(RowAbsolute:=False, ColumnAbsolute:=False)
+            aSheet.Range("C" & aStr & ":" & aAddress).Interior.Color = RGB(255, 255, 255)
+            btn.TextFrame.Characters.Text = Left(cap, Len(cap) - 1) & "0"
+        End If
+    End If
 End Sub
 """
-
-_WORKBOOK_OPEN_VBA = """
-Private Sub Workbook_Open()
-    On Error Resume Next
-    Application.Run "cv_WireHollandMarkerButtons"
-End Sub
-"""
-
-_SHEET_ACTIVATE_VBA = """
-Private Sub Worksheet_Activate()
-    On Error Resume Next
-    Application.Run "cv_WireHollandMarkerButtons"
-End Sub
-"""
-
-_VBEXT_CT_DOCUMENT = 100
 
 
 def _default_log(_msg: str) -> None:
@@ -184,6 +153,13 @@ def _last_data_row_xlsx(export_path: Path) -> int:
     return last
 
 
+def _remove_obsolete_marker_class(vbproject: object) -> None:
+    try:
+        vbproject.VBComponents.Remove(vbproject.VBComponents(_OBSOLETE_MARKER_CLASS))
+    except Exception:
+        pass
+
+
 def _ensure_std_module(vbproject: object, name: str, code: str) -> None:
     try:
         mod = vbproject.VBComponents(name)
@@ -192,93 +168,15 @@ def _ensure_std_module(vbproject: object, name: str, code: str) -> None:
         mod.Name = name
     code_module = mod.CodeModule
     existing = code_module.Lines(1, code_module.CountOfLines) if code_module.CountOfLines else ""
-    if _CV_SYNC_MACRO in existing and "cvDelHollandMarkerButtons" in existing:
-        return
-    if code_module.CountOfLines:
-        code_module.InsertLines(code_module.CountOfLines + 1, code)
-    else:
-        code_module.AddFromString(code)
-
-
-def _ensure_class_module(vbproject: object, name: str, code: str) -> None:
-    try:
-        mod = vbproject.VBComponents(name)
-    except Exception:
-        mod = vbproject.VBComponents.Add(2)
-        mod.Name = name
-    code_module = mod.CodeModule
-    if code_module.CountOfLines and "EventButton_Click" in code_module.Lines(1, code_module.CountOfLines):
+    if (
+        _CV_SYNC_MACRO in existing
+        and _CV_CLICK_MACRO in existing
+        and "MSForms" not in existing
+    ):
         return
     if code_module.CountOfLines:
         code_module.DeleteLines(1, code_module.CountOfLines)
     code_module.AddFromString(code)
-
-
-def _find_vb_component(vbproject: object, name: str) -> object:
-    try:
-        return vbproject.VBComponents(name)
-    except Exception:
-        pass
-    count = int(vbproject.VBComponents.Count)
-    for i in range(1, count + 1):
-        comp = vbproject.VBComponents.Item(i)
-        if str(comp.Name) == name:
-            return comp
-        try:
-            if str(comp.Properties("Codename").Value) == name:
-                return comp
-        except Exception:
-            pass
-    raise KeyError(name)
-
-
-def _find_this_workbook_component(vbproject: object, wb: object) -> object | None:
-    workbook_names = frozenset({"thisworkbook", "этакнига"})
-    sheet_codes: set[str] = set()
-    for sht in wb.sheets:
-        try:
-            sheet_codes.add(str(sht.api.CodeName).casefold())
-        except Exception:
-            pass
-    for i in range(1, int(vbproject.VBComponents.Count) + 1):
-        comp = vbproject.VBComponents.Item(i)
-        if int(comp.Type) != _VBEXT_CT_DOCUMENT:
-            continue
-        if str(comp.Name).casefold() in workbook_names:
-            return comp
-        try:
-            codename = str(comp.Properties("CodeName").Value).casefold()
-        except Exception:
-            codename = str(comp.Name).casefold()
-        if codename in workbook_names:
-            return comp
-        if codename in sheet_codes:
-            continue
-    for name in ("ThisWorkbook", "ЭтаКнига"):
-        try:
-            return _find_vb_component(vbproject, name)
-        except KeyError:
-            continue
-    return None
-
-
-def _append_vba_hook(code_module: object, hook_code: str, marker: str) -> None:
-    existing = code_module.Lines(1, code_module.CountOfLines) if code_module.CountOfLines else ""
-    if marker in existing:
-        return
-    if code_module.CountOfLines:
-        code_module.InsertLines(code_module.CountOfLines + 1, hook_code)
-    else:
-        code_module.AddFromString(hook_code)
-
-
-def _ensure_workbook_open_wire(vbproject: object, wb: object, sheet_codename: str) -> None:
-    mod = _find_this_workbook_component(vbproject, wb)
-    if mod is not None:
-        _append_vba_hook(mod.CodeModule, _WORKBOOK_OPEN_VBA, "cv_WireHollandMarkerButtons")
-        return
-    mod = _find_vb_component(vbproject, sheet_codename)
-    _append_vba_hook(mod.CodeModule, _SHEET_ACTIVATE_VBA, "cv_WireHollandMarkerButtons")
 
 
 def _missing_marker_assets(assets_dir: Path) -> list[str]:
@@ -289,8 +187,57 @@ def _holland_last_col(sheet: object) -> int:
     return int(sheet.api.Range("C1").End(-4161).Column)  # xlToRight
 
 
+def _delete_holland_marker_buttons(sheet: object) -> None:
+    shapes = sheet.api.Shapes
+    for i in range(int(shapes.Count), 0, -1):
+        shp = shapes.Item(i)
+        try:
+            if int(shp.Type) == _MSO_FORM_CONTROL and int(shp.FormControlType) == _XL_BUTTON_CONTROL:
+                if str(shp.Name).startswith("cvM"):
+                    shp.Delete()
+        except Exception:
+            pass
+    _delete_row_command_buttons(sheet)
+
+
+def _add_form_marker_button(
+    sheet: object,
+    *,
+    row: int,
+    col: int,
+    prefix: str,
+    color_rgb: int,
+    macro: str,
+) -> None:
+    cell = sheet.api.Cells(row, col)
+    shp = sheet.api.Shapes.AddFormControl(
+        _XL_BUTTON_CONTROL,
+        float(cell.Left),
+        float(cell.Top),
+        float(cell.Width),
+        float(cell.Height),
+    )
+    shp.Name = f"cvM{prefix}{row}"
+    shp.OnAction = macro
+    shp.TextFrame.Characters().Text = f"{prefix} {row} 0"
+    shp.Fill.Visible = True
+    shp.Fill.ForeColor.RGB = color_rgb
+    shp.Line.Visible = False
+
+
 def _count_marker_buttons(sheet: object) -> int:
     count = 0
+    shapes = sheet.api.Shapes
+    for i in range(1, int(shapes.Count) + 1):
+        try:
+            shp = shapes.Item(i)
+            if int(shp.Type) == _MSO_FORM_CONTROL and int(shp.FormControlType) == _XL_BUTTON_CONTROL:
+                if str(shp.Name).startswith("cvM"):
+                    count += 1
+        except Exception:
+            pass
+    if count:
+        return count
     oles = sheet.api.OLEObjects()
     for i in range(1, int(oles.Count) + 1):
         try:
@@ -320,33 +267,30 @@ def _sync_holland_markers_com(
     last_row: int,
     assets_dir: Path,
 ) -> None:
-    red_img = str((assets_dir / "Red_Check_Off.bmp").resolve())
-    green_img = str((assets_dir / "Green_Check_Off.bmp").resolve())
-    if not Path(red_img).is_file() or not Path(green_img).is_file():
-        raise FileNotFoundError(f"Нет bmp в {assets_dir}")
-
-    app_api = wb.app.api
+    del assets_dir
+    click_macro = f"{_MARKER_MODULE}.{_CV_CLICK_MACRO}"
     sheet.api.Columns("A:A").ColumnWidth = 2.2
     sheet.api.Columns("B:B").ColumnWidth = 2.2
-    _delete_row_command_buttons(sheet)
+    _delete_holland_marker_buttons(sheet)
     last_col = _holland_last_col(sheet)
 
     for row in range(first_row, last_row + 1):
-        for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
-            cell = sheet.api.Cells(row, col)
-            ole = sheet.api.OLEObjects().Add(
-                "Forms.CommandButton.1",
-                "",
-                False,
-                False,
-                float(cell.Left),
-                float(cell.Top),
-                float(cell.Width),
-                float(cell.Height),
-            )
-            btn = ole.Object
-            _apply_command_button_picture(btn, img, app_api, wb=wb)
-            btn.Caption = f"{prefix} {row} 0"
+        _add_form_marker_button(
+            sheet,
+            row=row,
+            col=1,
+            prefix="1",
+            color_rgb=_ole_rgb(255, 0, 0),
+            macro=click_macro,
+        )
+        _add_form_marker_button(
+            sheet,
+            row=row,
+            col=2,
+            prefix="2",
+            color_rgb=_ole_rgb(0, 128, 0),
+            macro=click_macro,
+        )
 
         color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
         sheet.api.Range(
@@ -355,51 +299,20 @@ def _sync_holland_markers_com(
         ).Interior.Color = color
 
 
-def _inject_marker_vba(
-    wb: object,
-    sheet_codename: str,
-    *,
-    wire_clicks: bool = True,
-) -> list[str]:
+def _inject_marker_vba(wb: object) -> list[str]:
     vb = wb.api.VBProject
     warnings: list[str] = []
     steps: list[tuple[str, Callable[[], None]]] = [
         ("picture helper", lambda: _ensure_picture_helper_vba(wb)),
+        ("remove old class", lambda: _remove_obsolete_marker_class(vb)),
         ("markers module", lambda: _ensure_std_module(vb, _MARKER_MODULE, _CV_SYNC_VBA)),
     ]
-    if wire_clicks:
-        steps.extend(
-            [
-                ("click class", lambda: _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)),
-                (
-                    "workbook open",
-                    lambda: _ensure_workbook_open_wire(vb, wb, sheet_codename),
-                ),
-            ]
-        )
     for label, action in steps:
         try:
             action()
         except Exception as e:
             warnings.append(f"{label}: {e}")
     return warnings
-
-
-def _wire_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
-    specs = (
-        f"{_MARKER_MODULE}.{_CV_WIRE_MACRO}",
-        _CV_WIRE_MACRO,
-        f"'{wb.name}'!{_CV_WIRE_MACRO}",
-    )
-    last_err: Exception | None = None
-    for spec in specs:
-        try:
-            app.api.Run(spec)
-            log("Голландия: обработчики кликов подключены (VBA).")
-            return
-        except Exception as e:
-            last_err = e
-    log(f"Голландия: клики по маркерам — без VBA ({last_err})")
 
 
 def _sync_holland_markers_vba(
@@ -411,8 +324,7 @@ def _sync_holland_markers_vba(
     log: LogFn,
 ) -> bool:
     last_err: Exception | None = None
-    sheet_codename = str(wb.sheets[0].api.CodeName)
-    for warn in _inject_marker_vba(wb, sheet_codename, wire_clicks=False):
+    for warn in _inject_marker_vba(wb):
         log(f"Голландия: VBA inject — {warn}")
     specs = (
         f"{_MARKER_MODULE}.{_CV_SYNC_MACRO}",
@@ -476,7 +388,6 @@ def add_holland_row_markers(
         app.api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
         wb = app.books.open(str(export_path), update_links=False)
         ws = wb.sheets[0]
-        sheet_codename = str(ws.api.CodeName)
         need_insert = export_path.suffix.lower() == ".xlsx" and not _marker_columns_already(ws)
         if need_insert:
             ws.api.Columns("A:B").Insert()
@@ -508,8 +419,11 @@ def add_holland_row_markers(
         except Exception as e:
             _lg(f"Голландия: VBA недоступен ({e})")
 
-        if not vba_ok or _count_marker_buttons(ws) < (last_row - _HOLLAND_DATA_FIRST_ROW + 1):
+        expected = (last_row - _HOLLAND_DATA_FIRST_ROW + 1) * 2
+        if not vba_ok or _count_marker_buttons(ws) < expected:
             _lg("Голландия: маркеры через COM…")
+            for warn in _inject_marker_vba(wb):
+                _lg(f"Голландия: VBA inject — {warn}")
             _sync_holland_markers_com(
                 wb,
                 ws,
@@ -519,19 +433,11 @@ def add_holland_row_markers(
             )
 
         btn_count = _count_marker_buttons(ws)
-        expected = (last_row - _HOLLAND_DATA_FIRST_ROW + 1) * 2
         if btn_count < expected:
             raise RuntimeError(
                 f"Создано кнопок {btn_count} из {expected}. "
-                "Проверьте bmp рядом с файлом и «Доверять доступ к VBA» в Excel."
+                "Проверьте «Доверять доступ к VBA» в Excel."
             )
-
-        for warn in _inject_marker_vba(wb, sheet_codename, wire_clicks=True):
-            _lg(f"Голландия: VBA inject — {warn}")
-        try:
-            _wire_marker_clicks(app, wb, log=_lg)
-        except Exception as e:
-            _lg(f"Голландия: клики по маркерам могут не работать — {e}")
 
         wb.save()
         _lg(
