@@ -15,14 +15,15 @@ from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
 LogFn = Callable[[str], None]
 
-_HOLLAND_DATA_FIRST_ROW = 2
+_HOLLAND_DATA_FIRST_ROW = 8  # offset_Y=7 в btnImport_Click (Auto_new)
 _MSO_AUTOMATION_SECURITY_LOW = 1
 _ZEBRA_EVEN = 12379351
 _ZEBRA_ODD = 9944773
 
 _CV_SYNC_MACRO = "cv_SyncHollandMarkers"
 _CV_WIRE_MACRO = "cv_WireHollandMarkerButtons"
-_MARKER_MODULE = "cvHollandMarkers"
+_MARKER_MODULE = "Module1"  # как cv_SyncRowCheckboxes в Эквадоре
+_LEGACY_MARKER_MODULE = "cvHollandMarkers"
 _MARKER_CLASS = "cvHollandButtonHandler"
 _EDIT_BUTTON_NAME = "cbHollandEdit"
 _XL_CHECKBOX = 1
@@ -89,7 +90,6 @@ Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
             End If
         Next aI
     End With
-    Call cv_WireHollandMarkerButtons
 End Sub
 
 Public Sub cvDelExportCheckboxes(aSheet As String)
@@ -209,24 +209,58 @@ def _remove_obsolete_marker_classes(vbproject: object) -> None:
             pass
 
 
-def _ensure_std_module(vbproject: object, name: str, code: str) -> None:
+def _remove_legacy_holland_module(vbproject: object) -> None:
     try:
-        mod = vbproject.VBComponents(name)
+        vbproject.VBComponents.Remove(vbproject.VBComponents(_LEGACY_MARKER_MODULE))
     except Exception:
-        mod = vbproject.VBComponents.Add(1)
-        mod.Name = name
+        pass
+
+
+def _vb_has_macro(vbproject: object, module_name: str, macro_name: str) -> bool:
+    try:
+        mod = vbproject.VBComponents(module_name)
+        cm = mod.CodeModule
+        line_count = int(cm.CountOfLines)
+        if not line_count:
+            return False
+        existing = cm.Lines(1, line_count)
+        return f"Sub {macro_name}" in existing
+    except Exception:
+        return False
+
+
+def _ensure_holland_marker_macros(wb: object) -> None:
+    """Public-макросы в Module1 — тот же приём, что cv_SyncRowCheckboxes в Эквадоре."""
+    vb = wb.api.VBProject
+    ensure_vba_references(vb)
+    try:
+        mod = vb.VBComponents(_MARKER_MODULE)
+    except Exception:
+        mod = vb.VBComponents.Add(1)
+        mod.Name = _MARKER_MODULE
     code_module = mod.CodeModule
-    existing = code_module.Lines(1, code_module.CountOfLines) if code_module.CountOfLines else ""
+    line_count = int(code_module.CountOfLines)
+    existing = code_module.Lines(1, line_count) if line_count else ""
     if (
-        _CV_SYNC_MACRO in existing
-        and _CV_WIRE_MACRO in existing
-        and "Forms.CommandButton.1" in existing
+        f"Sub {_CV_SYNC_MACRO}" in existing
+        and f"Sub {_CV_WIRE_MACRO}" in existing
         and "cvDelExportCheckboxes" in existing
     ):
         return
     if code_module.CountOfLines:
         code_module.DeleteLines(1, code_module.CountOfLines)
-    code_module.AddFromString(code)
+    code_module.AddFromString(_CV_SYNC_VBA)
+
+
+def _prepare_workbook_for_macro_run(wb: object) -> None:
+    try:
+        wb.activate()
+    except Exception:
+        pass
+    try:
+        wb.save()
+    except Exception:
+        pass
 
 
 def _ensure_class_module(vbproject: object, name: str, code: str) -> None:
@@ -462,16 +496,16 @@ def _sync_holland_markers_com(
 
 
 def _inject_marker_vba(wb: object) -> list[str]:
-    vb = wb.api.VBProject
     warnings: list[str] = []
     try:
-        ensure_vba_references(vb)
+        vb = wb.api.VBProject
     except Exception as e:
-        warnings.append(f"MSForms: {e}")
+        return [f"VBProject: {e} (включите «Доверять доступ к объектной модели VBA»)"]
     steps: list[tuple[str, Callable[[], None]]] = [
         ("picture helper", lambda: _ensure_picture_helper_vba(wb)),
+        ("legacy module", lambda: _remove_legacy_holland_module(vb)),
         ("remove old class", lambda: _remove_obsolete_marker_classes(vb)),
-        ("markers module", lambda: _ensure_std_module(vb, _MARKER_MODULE, _CV_SYNC_VBA)),
+        ("markers module", lambda: _ensure_holland_marker_macros(wb)),
         ("click class", lambda: _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)),
     ]
     for label, action in steps:
@@ -479,14 +513,18 @@ def _inject_marker_vba(wb: object) -> list[str]:
             action()
         except Exception as e:
             warnings.append(f"{label}: {e}")
+    if not _vb_has_macro(vb, _MARKER_MODULE, _CV_SYNC_MACRO):
+        warnings.append(f"макрос {_CV_SYNC_MACRO} не найден в {_MARKER_MODULE}")
     return warnings
 
 
 def _wire_holland_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
+    _prepare_workbook_for_macro_run(wb)
+    wb_name = str(wb.name)
     specs = (
-        f"{_MARKER_MODULE}.{_CV_WIRE_MACRO}",
         _CV_WIRE_MACRO,
-        f"'{wb.name}'!{_CV_WIRE_MACRO}",
+        f"{_MARKER_MODULE}.{_CV_WIRE_MACRO}",
+        f"'{wb_name}'!{_CV_WIRE_MACRO}",
     )
     for spec in specs:
         try:
@@ -507,12 +545,19 @@ def _sync_holland_markers_vba(
     log: LogFn,
 ) -> bool:
     last_err: Exception | None = None
-    for warn in _inject_marker_vba(wb):
+    inject_warnings = _inject_marker_vba(wb)
+    for warn in inject_warnings:
         log(f"Голландия: VBA inject — {warn}")
+    if not _vb_has_macro(wb.api.VBProject, _MARKER_MODULE, _CV_SYNC_MACRO):
+        log("Голландия: VBA inject — макрос не в Module1, пропускаем Run")
+        return False
+
+    _prepare_workbook_for_macro_run(wb)
+    wb_name = str(wb.name)
     specs = (
-        f"{_MARKER_MODULE}.{_CV_SYNC_MACRO}",
         _CV_SYNC_MACRO,
-        f"'{wb.name}'!{_CV_SYNC_MACRO}",
+        f"{_MARKER_MODULE}.{_CV_SYNC_MACRO}",
+        f"'{wb_name}'!{_CV_SYNC_MACRO}",
     )
     for spec in specs:
         try:
@@ -621,6 +666,7 @@ def add_holland_row_markers(
                 assets_dir=assets_target,
             )
             btn_count = _count_marker_buttons(ws)
+            _lg(f"Голландия: маркеры готовы (COM), кнопок: {btn_count}.")
         elif vba_ok and btn_count < expected:
             _lg(
                 f"Голландия: VBA отработал, в подсчёте {btn_count}/{expected} кн. "
