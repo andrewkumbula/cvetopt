@@ -179,6 +179,8 @@ class HollandTranslateConfig(BaseModel):
     archive_previous_on_auto1: bool = True
     # Без перевода в словаре — дописать Description в колонку B (C пустая).
     append_missing_to_dictionary: bool = True
+    # После выгрузки — колонки A–B с красной/зелёной кнопкой (как Эквадор), файл .xlsm.
+    add_row_markers: bool = True
 
 
 class EcuadorCreateConfig(BaseModel):

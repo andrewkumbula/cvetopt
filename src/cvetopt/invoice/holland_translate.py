@@ -39,7 +39,7 @@ def _next_col_letter(col: str) -> str:
 def holland_export_candidates(output_dir: Path, on_date: date | None = None) -> list[Path]:
     if not output_dir.is_dir():
         return []
-    names: list[str] = ["Голландия_1_*.xlsx"]
+    names: list[str] = ["Голландия_1_*.xlsx", "Голландия_1_*.xlsm"]
     if on_date is not None:
         names.insert(0, f"Голландия_1_{on_date.strftime('%d.%m.%Y')}.xlsx")
         names.insert(1, f"Голландия_1_{on_date.day}.{on_date.month}.{on_date.year}.xlsx")
@@ -53,7 +53,13 @@ def holland_export_candidates(output_dir: Path, on_date: date | None = None) -> 
                 found.append(rp)
     if found:
         return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
-    return sorted(output_dir.glob("Голландия_1_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+    found = sorted(
+        list(output_dir.glob("Голландия_1_*.xlsx"))
+        + list(output_dir.glob("Голландия_1_*.xlsm")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return found
 
 
 def find_holland_export_file(
@@ -294,6 +300,8 @@ def postprocess_holland_after_auto1(
     dictionary_path: Path,
     on_date: date | None = None,
     append_missing_to_dictionary: bool = True,
+    add_row_markers: bool = False,
+    marker_assets_dir: Path | None = None,
     log: LogFn | None = None,
 ) -> Path | None:
     """Ищет свежий Голландия_1_*.xlsx в папке склада и переводит Description."""
@@ -308,4 +316,15 @@ def postprocess_holland_after_auto1(
         append_missing_to_dictionary=append_missing_to_dictionary,
         log=_lg,
     )
+    if add_row_markers and marker_assets_dir is not None:
+        from cvetopt.invoice.holland_markers import add_holland_row_markers
+
+        try:
+            export_file = add_holland_row_markers(
+                export_file,
+                marker_assets_dir,
+                log=_lg,
+            )
+        except Exception as e:
+            _lg(f"Голландия: маркеры пропущены — {e}")
     return export_file

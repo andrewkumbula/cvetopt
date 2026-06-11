@@ -92,6 +92,7 @@ holland_translate:
   sklad_output_dir: "C:\\Инвойсы склад"
   archive_previous_on_auto1: true
   append_missing_to_dictionary: true
+  add_row_markers: true
   # Значения по умолчанию; в UI «Настройки» (Перевод) перекрывают.
   dictionary_path: "C:\\Invoice\\Словарь.xls"
 

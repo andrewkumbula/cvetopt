@@ -8,6 +8,7 @@ from cvetopt.core.runtime_settings import (
     effective_holland_dictionary_raw,
     effective_holland_sklad_dir_raw,
     load_runtime_settings,
+    resolve_ecuador_template,
     resolve_holland_dictionary,
     resolve_holland_sklad_dir,
 )
@@ -41,12 +42,19 @@ async def run_holland_translate_job(job_id: str, env: EnvSettings) -> None:
     def _thread_log(msg: str) -> None:
         asyncio.run_coroutine_threadsafe(job_log(job_id, msg), loop).result(timeout=120)
 
+    marker_assets = (
+        resolve_ecuador_template(env, runtime.ecuador_template_path).parent
+        if cfg.add_row_markers
+        else None
+    )
     export_path = await asyncio.to_thread(
         postprocess_holland_after_auto1,
         sklad_output_dir=sklad_dir,
         dictionary_path=dict_path,
         on_date=date.today(),
         append_missing_to_dictionary=cfg.append_missing_to_dictionary,
+        add_row_markers=cfg.add_row_markers,
+        marker_assets_dir=marker_assets,
         log=_thread_log,
     )
     if export_path is None:

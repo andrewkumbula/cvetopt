@@ -9,6 +9,7 @@ from cvetopt.core.runtime_settings import (
     load_runtime_settings,
     resolve_auto_new_workbook,
     resolve_biflorica_archive_dir,
+    resolve_ecuador_template,
     resolve_holland_sklad_dir,
 )
 from cvetopt.core.settings import EnvSettings
@@ -61,18 +62,19 @@ async def run_auto1_pipeline_job(job_id: str, env: EnvSettings) -> None:
         raise
 
     holland_cfg = yaml_cfg.holland_translate
+    sklad_dir = resolve_holland_sklad_dir(
+        env,
+        effective_holland_sklad_dir_raw(runtime, yaml_dir=holland_cfg.sklad_output_dir),
+    )
+    newest = find_holland_export_file(sklad_dir)
+
     if holland_cfg.archive_previous_on_auto1:
-        sklad_dir = resolve_holland_sklad_dir(
-            env,
-            effective_holland_sklad_dir_raw(runtime, yaml_dir=holland_cfg.sklad_output_dir),
-        )
         archive_dir = resolve_biflorica_archive_dir(
             env,
             runtime.biflorica_archive_dir,
             runtime=runtime,
         )
         archive_dir.mkdir(parents=True, exist_ok=True)
-        newest = find_holland_export_file(sklad_dir)
         if newest is None:
             await lg(f"Голландия: файл не найден в {sklad_dir} — архив не нужен")
         else:
@@ -87,5 +89,20 @@ async def run_auto1_pipeline_job(job_id: str, env: EnvSettings) -> None:
                 )
             except Exception as e:
                 await lg(f"Голландия: архив пропущен — {e}")
+
+    if holland_cfg.add_row_markers and newest is not None:
+        from cvetopt.invoice.holland_markers import add_holland_row_markers
+
+        assets_dir = resolve_ecuador_template(env, runtime.ecuador_template_path).parent
+        try:
+            marked = await asyncio.to_thread(
+                add_holland_row_markers,
+                newest,
+                assets_dir,
+                log=_thread_log,
+            )
+            await lg(f"Голландия: маркеры → {marked.name}")
+        except Exception as e:
+            await lg(f"Голландия: маркеры пропущены — {e}")
 
     await lg("Готово: цепочка auto1 выполнена.")
