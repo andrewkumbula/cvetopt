@@ -408,18 +408,39 @@ def _delete_holland_marker_buttons(sheet: object) -> None:
             pass
 
 
+def _is_command_button_ole(ole: object) -> bool:
+    """У OLEObject читается progID (Forms.CommandButton.1), а не ClassType."""
+    seen_any = False
+    for attr in ("progID", "ClassType", "OLEClass"):
+        try:
+            val = str(getattr(ole, attr))
+        except Exception:
+            continue
+        seen_any = True
+        if "CommandButton" in val:
+            return True
+    # Свойства прочитались, но это не CommandButton.
+    if seen_any:
+        return False
+    # Тип определить не удалось — на листе маркеров остаются только кнопки.
+    return True
+
+
 def _count_marker_buttons(sheet: object) -> int:
     count = 0
     oles = sheet.api.OLEObjects()
     for i in range(1, int(oles.Count) + 1):
         try:
             ole = oles.Item(i)
+        except Exception:
+            continue
+        try:
             if str(ole.Name) in _HOLLAND_RESERVED_OLE:
                 continue
-            if "CommandButton" in str(ole.ClassType):
-                count += 1
         except Exception:
             pass
+        if _is_command_button_ole(ole):
+            count += 1
     return count
 
 
@@ -687,9 +708,9 @@ def add_holland_row_markers(
         elif vba_ok and btn_count < expected:
             _lg(
                 f"Голландия: VBA отработал, в подсчёте {btn_count}/{expected} кн. "
-                "— сохраняем без повторного COM."
+                "— доверяем VBA, сохраняем как есть."
             )
-        if btn_count < expected:
+        if not vba_ok and btn_count < expected:
             raise RuntimeError(
                 f"Создано кнопок {btn_count} из {expected}. "
                 "Проверьте «Доверять доступ к VBA» в Excel."
