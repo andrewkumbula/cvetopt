@@ -189,6 +189,8 @@ class EcuadorCreateConfig(BaseModel):
     auto_after_biflorica: bool = False
     # True — вызывать VBA cv_Run_CreateFile (нужен доступ к VBA); False — SaveAs из Python (стабильно).
     use_create_file_macro: bool = False
+    # После создания нового «Эквадор …xlsm» — старые в архив (папка в UI «Настройки»).
+    archive_previous_on_create: bool = True
 
 
 class DelmirSelectors(BaseModel):

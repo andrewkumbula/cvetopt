@@ -11,7 +11,10 @@ from datetime import datetime
 from pathlib import Path
 
 from cvetopt.core.runtime_settings import (
+    _archive_one_entry,
+    _archive_target_path,
     order_id_from_biflorica_report,
+    resolve_ecuador_archive_dir,
     resolve_ecuador_output_dir,
     resolve_ecuador_template,
 )
@@ -448,15 +451,90 @@ def _save_via_python(
     return out_path
 
 
+def ecuador_export_candidates(output_dir: Path) -> list[Path]:
+    """Файлы «Эквадор …xlsm» в корне папки выгрузки (не в подпапках архива)."""
+    if not output_dir.is_dir():
+        return []
+    found: list[Path] = []
+    for entry in output_dir.iterdir():
+        if not entry.is_file():
+            continue
+        if entry.suffix.lower() != ".xlsm":
+            continue
+        if not entry.name.lower().startswith("эквадор"):
+            continue
+        if entry.name.startswith("_"):
+            continue
+        found.append(entry.resolve())
+    return sorted(found, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
 def _newest_ecuador_xlsm(output_dir: Path) -> Path | None:
-    items = [
-        path
-        for path in output_dir.glob("Эквадор*.xlsm")
-        if path.is_file()
-    ]
-    if not items:
-        return None
-    return max(items, key=lambda path: path.stat().st_mtime)
+    items = ecuador_export_candidates(output_dir)
+    return items[0] if items else None
+
+
+def archive_stale_ecuador_exports(
+    output_dir: Path,
+    archive_dir: Path,
+    *,
+    keep_path: Path,
+    log: LogFn | None = None,
+) -> tuple[Path | None, list[str], list[str]]:
+    """
+    Оставляет один файл Эквадор (keep_path), остальные переносит в папку архива.
+    """
+    _lg = log or (lambda _msg: None)
+    if not output_dir.is_dir():
+        return None, [], []
+
+    archive_dir = archive_dir.resolve()
+    output_dir = output_dir.resolve()
+    keep = keep_path.resolve()
+    if archive_dir == output_dir:
+        raise ValueError("Папка архива Эквадор не может совпадать с папкой выгрузки.")
+
+    candidates: list[Path] = []
+    for path in ecuador_export_candidates(output_dir):
+        try:
+            path.resolve().relative_to(archive_dir)
+        except ValueError:
+            candidates.append(path)
+
+    to_move = [path for path in candidates if path.resolve() != keep]
+    if not to_move:
+        _lg("Эквадор: старых файлов для архива нет")
+        return None, [], []
+
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    moved: list[str] = []
+    warnings: list[str] = []
+    if sys.platform == "win32" and not os.access(archive_dir, os.W_OK):
+        import getpass
+
+        warnings.append(
+            f"Папка архива {archive_dir}: нет записи для «{getpass.getuser()}»."
+        )
+
+    for src in sorted(to_move, key=lambda p: p.name.lower()):
+        target = _archive_target_path(archive_dir, src, stamp)
+        if not os.access(src, os.R_OK):
+            warnings.append(f"{src.name}: пропуск (нет чтения)")
+            continue
+        try:
+            warn = _archive_one_entry(src, target)
+            moved.append(src.name)
+            if warn:
+                warnings.append(warn)
+        except OSError as e:
+            warnings.append(f"{src.name}: не удалось архивировать — {e}")
+
+    if moved:
+        _lg(f"Эквадор: в архив {len(moved)} → {archive_dir}")
+    for warn in warnings:
+        _lg(f"Эквадор (архив): {warn}")
+    return (archive_dir if moved else None), moved, warnings
 
 
 def _apply_create_file_ui(workbook: object, output_name: str) -> None:
@@ -607,6 +685,25 @@ def create_ecuador_file_from_biflorica(
                 pass
         wb = None
         _lg(f"Эквадор: файл создан → {out_path}")
+
+        if yaml_ecuador.archive_previous_on_create:
+            archive_dir = resolve_ecuador_archive_dir(
+                env,
+                runtime.ecuador_archive_dir,
+                out_dir,
+                runtime=runtime,
+            )
+            _lg(f"Эквадор: архив {archive_dir}")
+            try:
+                archive_stale_ecuador_exports(
+                    out_dir,
+                    archive_dir,
+                    keep_path=out_path.resolve(),
+                    log=log,
+                )
+            except Exception as e:
+                _lg(f"Эквадор: архив старых файлов пропущен — {e}")
+
         return out_path
     finally:
         if wb is not None:

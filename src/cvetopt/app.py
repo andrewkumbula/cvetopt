@@ -21,6 +21,7 @@ from cvetopt.core.runtime_settings import (
     validate_biflorica_archive_dir,
     validate_biflorica_download_dir,
     validate_auto_new_workbook_path,
+    validate_ecuador_archive_dir,
     validate_ecuador_paths,
     validate_holland_translate_paths,
     validate_mail_output_dirs,
@@ -163,6 +164,14 @@ async def api_runtime_settings_update(request: Request) -> JSONResponse:
         )
         if ecu_err:
             return JSONResponse({"error": ecu_err}, status_code=422)
+        ecu_arch_err = validate_ecuador_archive_dir(
+            env,
+            settings.ecuador_archive_dir,
+            settings.ecuador_output_dir,
+            runtime=settings,
+        )
+        if ecu_arch_err:
+            return JSONResponse({"error": ecu_arch_err}, status_code=422)
         mail_err = validate_mail_output_dirs(env, settings)
         if mail_err:
             return JSONResponse({"error": mail_err}, status_code=422)

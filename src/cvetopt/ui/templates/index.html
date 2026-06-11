@@ -172,7 +172,7 @@
       </form>
       <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
         Windows + Excel. Берёт последний <code>BiFlorica-*.xlsx</code> из папки скачивания,
-        шаблон и папку выгрузки — в <strong>Настройки</strong>. Сохранение — как «Создать файл» (Python SaveAs).
+        шаблон и папки — в <strong>Настройки</strong>. Старые <code>Эквадор *.xlsm</code> уходят в архив.
       </p>
     </div>
 
@@ -315,11 +315,24 @@
           class="input-path"
           type="text"
           name="ecuador_output_dir"
-          placeholder="D:\Склад ОБмен\Инвойсы Склад"
+          placeholder="C:\Инвойсы склад"
           value="{{ runtime_settings.ecuador_output_dir|default('D:\\Склад ОБмен\\Инвойсы Склад') }}"
           spellcheck="false"
         />
         <button type="button" data-pick-target="ecuador_output">Выбрать…</button>
+      </div>
+      <label for="ecuador_archive" class="muted">Эквадор, архив старых .xlsm:</label>
+      <div class="path-row">
+        <input
+          id="ecuador_archive"
+          class="input-path"
+          type="text"
+          name="ecuador_archive_dir"
+          placeholder="C:\Инвойсы склад\Архивы Инвойсы (пусто — подпапка в папке выгрузки)"
+          value="{{ runtime_settings.ecuador_archive_dir|default('C:\\Инвойсы склад\\Архивы Инвойсы') }}"
+          spellcheck="false"
+        />
+        <button type="button" data-pick-target="ecuador_archive">Выбрать…</button>
       </div>
       <label for="lookback_days" class="muted">Почта, за дней:</label>
       <input
@@ -424,6 +437,7 @@
     const hollandSkladDirInput = document.getElementById("holland_sklad_dir");
     const ecuadorTemplateInput = document.getElementById("ecuador_template");
     const ecuadorOutputInput = document.getElementById("ecuador_output");
+    const ecuadorArchiveInput = document.getElementById("ecuador_archive");
     const pickFolderBtns = document.querySelectorAll("[data-pick-target]");
     const saveSettingsBtn = document.getElementById("save-settings-btn");
     const saveSettingsMsg = document.getElementById("save-settings-msg");
@@ -626,7 +640,7 @@
       });
     }
 
-    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && hollandDictionaryInput && hollandSkladDirInput && ecuadorTemplateInput && ecuadorOutputInput) {
+    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && hollandDictionaryInput && hollandSkladDirInput && ecuadorTemplateInput && ecuadorOutputInput && ecuadorArchiveInput) {
       const parseDays = (input, fallback) => {
         const n = Number.parseInt(input.value, 10);
         return Number.isFinite(n) ? n : fallback;
@@ -642,6 +656,7 @@
           holland_sklad_output_dir: hollandSkladDirInput.value.trim(),
           ecuador_template_path: ecuadorTemplateInput.value.trim(),
           ecuador_output_dir: ecuadorOutputInput.value.trim(),
+          ecuador_archive_dir: ecuadorArchiveInput.value.trim(),
           delmir_lookback_days: parseDays(delmirLookbackInput, 14),
           mail_lookback_days: parseDays(lookbackInput, 14),
           mail_output_dir_short: mailDirShortInput.value.trim(),

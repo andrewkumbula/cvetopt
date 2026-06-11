@@ -26,6 +26,12 @@ BIFLORICA_ARCHIVE_SUBDIR = "архив"
 DEFAULT_ECUADOR_TEMPLATE = "Invoice/3/Обработка/Прием товара Эквадор-4.xlsm"
 ECUADOR_TEMPLATE_FILENAME = "Прием товара Эквадор-4.xlsm"
 DEFAULT_ECUADOR_OUTPUT_DIR = r"D:\Склад ОБмен\Инвойсы Склад"
+ECUADOR_ARCHIVE_SUBDIR = "Архивы Инвойсы"
+DEFAULT_ECUADOR_ARCHIVE_DIR = (
+    r"C:\Инвойсы склад\Архивы Инвойсы"
+    if sys.platform == "win32"
+    else "data/output/ecuador/Архивы Инвойсы"
+)
 DEFAULT_MAIL_OUTPUT_DIR_SHORT = "data/downloads/mail/1"
 DEFAULT_MAIL_OUTPUT_DIR_LONG = "data/downloads/mail/2"
 DEFAULT_MAIL_FILENAME_SHORT_MAX_LEN = 35
@@ -63,6 +69,7 @@ class RuntimeSettings(BaseModel):
     biflorica_archive_dir: str = Field(default=DEFAULT_BIFLORICA_ARCHIVE_DIR)
     ecuador_template_path: str = Field(default=DEFAULT_ECUADOR_TEMPLATE)
     ecuador_output_dir: str = Field(default=DEFAULT_ECUADOR_OUTPUT_DIR)
+    ecuador_archive_dir: str = Field(default=DEFAULT_ECUADOR_ARCHIVE_DIR)
     delmir_lookback_days: int
     mail_lookback_days: int
     mail_output_dir_short: str = Field(default=DEFAULT_MAIL_OUTPUT_DIR_SHORT)
@@ -87,6 +94,7 @@ def default_runtime_settings(env: EnvSettings) -> RuntimeSettings:
         biflorica_archive_dir=DEFAULT_BIFLORICA_ARCHIVE_DIR,
         ecuador_template_path=DEFAULT_ECUADOR_TEMPLATE,
         ecuador_output_dir=DEFAULT_ECUADOR_OUTPUT_DIR,
+        ecuador_archive_dir=DEFAULT_ECUADOR_ARCHIVE_DIR,
         delmir_lookback_days=yaml_cfg.delmir.lookback_days,
         mail_lookback_days=yaml_cfg.mail.lookback_days,
         mail_output_dir_short=yaml_cfg.mail.output_dir_short,
@@ -667,6 +675,39 @@ def resolve_ecuador_output_dir(env: EnvSettings, raw: str) -> Path:
     return _resolve_dir(env, text or default, default)
 
 
+def effective_ecuador_archive_dir_raw(
+    runtime: RuntimeSettings,
+    *,
+    output_dir: Path | None = None,
+) -> str:
+    """Пустое поле в UI → <папка выгрузки Эквадор>/Архивы Инвойсы."""
+    text = (runtime.ecuador_archive_dir or "").strip()
+    if text:
+        return text
+    out_raw = (runtime.ecuador_output_dir or "").strip()
+    if out_raw:
+        return str(Path(out_raw) / ECUADOR_ARCHIVE_SUBDIR)
+    if output_dir is not None:
+        return str(output_dir / ECUADOR_ARCHIVE_SUBDIR)
+    return DEFAULT_ECUADOR_ARCHIVE_DIR
+
+
+def resolve_ecuador_archive_dir(
+    env: EnvSettings,
+    raw_dir: str,
+    output_dir: Path,
+    *,
+    runtime: RuntimeSettings | None = None,
+) -> Path:
+    """Каталог архива Эквадор (настраивается в UI)."""
+    text = (raw_dir or "").strip()
+    if not text and runtime is not None:
+        text = effective_ecuador_archive_dir_raw(runtime, output_dir=output_dir)
+    if not text:
+        return (output_dir / ECUADOR_ARCHIVE_SUBDIR).resolve()
+    return _resolve_dir(env, text, DEFAULT_ECUADOR_ARCHIVE_DIR)
+
+
 def validate_ecuador_paths(env: EnvSettings, raw_template: str, raw_output: str) -> str | None:
     if sys.platform != "win32":
         return None
@@ -691,4 +732,36 @@ def validate_ecuador_paths(env: EnvSettings, raw_template: str, raw_output: str)
         output.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         return f"Эквадор: не удалось создать папку выгрузки — {e}"
+    return None
+
+
+def validate_ecuador_archive_dir(
+    env: EnvSettings,
+    raw_archive_dir: str,
+    raw_output_dir: str,
+    *,
+    runtime: RuntimeSettings | None = None,
+) -> str | None:
+    if sys.platform != "win32":
+        return None
+    if _skip_local_path_check(raw_archive_dir) or _skip_local_path_check(raw_output_dir):
+        return None
+    try:
+        output = resolve_ecuador_output_dir(env, raw_output_dir)
+        arch = resolve_ecuador_archive_dir(
+            env,
+            raw_archive_dir,
+            output,
+            runtime=runtime,
+        )
+    except (OSError, ValueError) as e:
+        return f"Эквадор, архив: некорректный путь — {e}"
+    if arch.exists() and not arch.is_dir():
+        return "Эквадор, архив: путь существует, но это не папка."
+    try:
+        arch.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"Эквадор, архив: не удалось создать папку — {e}"
+    if arch.resolve() == output.resolve():
+        return "Папка архива Эквадор не может совпадать с папкой выгрузки."
     return None
