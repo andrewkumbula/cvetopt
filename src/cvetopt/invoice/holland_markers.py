@@ -8,6 +8,7 @@ from cvetopt.invoice.ecuador_create import (
     _CHECKBOX_BMPS,
     _copy_checkbox_assets,
     _delete_row_command_buttons,
+    _ensure_picture_helper_vba,
     _load_picture,
 )
 from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
@@ -150,11 +151,14 @@ Private Sub EventButton_Click()
 End Sub
 """
 
-_SHEET_ACTIVATE_VBA = """
-Private Sub Worksheet_Activate()
+_WORKBOOK_OPEN_VBA = """
+Private Sub Workbook_Open()
+    On Error Resume Next
     Application.Run "cv_WireHollandMarkerButtons"
 End Sub
 """
+
+_VBEXT_CT_DOCUMENT = 100
 
 
 def _default_log(_msg: str) -> None:
@@ -203,16 +207,52 @@ def _ensure_class_module(vbproject: object, name: str, code: str) -> None:
     code_module.AddFromString(code)
 
 
-def _ensure_sheet_activate(vbproject: object, sheet_codename: str) -> None:
-    mod = vbproject.VBComponents(sheet_codename)
+def _find_vb_component(vbproject: object, name: str) -> object:
+    try:
+        return vbproject.VBComponents(name)
+    except Exception:
+        pass
+    count = int(vbproject.VBComponents.Count)
+    for i in range(1, count + 1):
+        comp = vbproject.VBComponents.Item(i)
+        if str(comp.Name) == name:
+            return comp
+        try:
+            if str(comp.Properties("Codename").Value) == name:
+                return comp
+        except Exception:
+            pass
+    raise KeyError(name)
+
+
+def _find_this_workbook_component(vbproject: object) -> object:
+    for i in range(1, int(vbproject.VBComponents.Count) + 1):
+        comp = vbproject.VBComponents.Item(i)
+        if int(comp.Type) != _VBEXT_CT_DOCUMENT:
+            continue
+        try:
+            if str(comp.Properties("Name").Value) in ("ThisWorkbook", "ЭтаКнига"):
+                return comp
+        except Exception:
+            pass
+    for name in ("ThisWorkbook", "ЭтаКнига"):
+        try:
+            return _find_vb_component(vbproject, name)
+        except KeyError:
+            continue
+    raise KeyError("ThisWorkbook")
+
+
+def _ensure_workbook_open_wire(vbproject: object) -> None:
+    mod = _find_this_workbook_component(vbproject)
     code_module = mod.CodeModule
     existing = code_module.Lines(1, code_module.CountOfLines) if code_module.CountOfLines else ""
     if "cv_WireHollandMarkerButtons" in existing:
         return
     if code_module.CountOfLines:
-        code_module.InsertLines(code_module.CountOfLines + 1, _SHEET_ACTIVATE_VBA)
+        code_module.InsertLines(code_module.CountOfLines + 1, _WORKBOOK_OPEN_VBA)
     else:
-        code_module.AddFromString(_SHEET_ACTIVATE_VBA)
+        code_module.AddFromString(_WORKBOOK_OPEN_VBA)
 
 
 def _missing_marker_assets(assets_dir: Path) -> list[str]:
@@ -279,7 +319,7 @@ def _sync_holland_markers_com(
                 float(cell.Height),
             )
             btn = ole.Object
-            btn.Picture = _load_picture(app_api, img)
+            btn.Picture = _load_picture(app_api, img, wb=wb)
             btn.Caption = f"{prefix} {row} 0"
 
         color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
@@ -289,11 +329,12 @@ def _sync_holland_markers_com(
         ).Interior.Color = color
 
 
-def _inject_marker_vba(wb: object, sheet_codename: str) -> None:
+def _inject_marker_vba(wb: object) -> None:
     vb = wb.api.VBProject
+    _ensure_picture_helper_vba(wb)
     _ensure_std_module(vb, _MARKER_MODULE, _CV_SYNC_VBA)
     _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)
-    _ensure_sheet_activate(vb, sheet_codename)
+    _ensure_workbook_open_wire(vb)
 
 
 def _wire_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
@@ -319,10 +360,9 @@ def _sync_holland_markers_vba(
     *,
     first_row: int,
     last_row: int,
-    sheet_codename: str,
     log: LogFn,
 ) -> bool:
-    _inject_marker_vba(wb, sheet_codename)
+    _inject_marker_vba(wb)
     specs = (
         f"{_MARKER_MODULE}.{_CV_SYNC_MACRO}",
         _CV_SYNC_MACRO,
@@ -385,8 +425,6 @@ def add_holland_row_markers(
         app.api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
         wb = app.books.open(str(export_path), update_links=False)
         ws = wb.sheets[0]
-        sheet_codename = str(ws.api.CodeName)
-
         need_insert = export_path.suffix.lower() == ".xlsx" and not _marker_columns_already(ws)
         if need_insert:
             ws.api.Columns("A:B").Insert()
@@ -401,6 +439,11 @@ def add_holland_row_markers(
         assets_target = xlsm_path.parent
         _copy_checkbox_assets(assets_dir, assets_target)
 
+        try:
+            _ensure_picture_helper_vba(wb)
+        except Exception as e:
+            _lg(f"Голландия: VBA helper — {e}")
+
         vba_ok = False
         try:
             vba_ok = _sync_holland_markers_vba(
@@ -408,7 +451,6 @@ def add_holland_row_markers(
                 wb,
                 first_row=_HOLLAND_DATA_FIRST_ROW,
                 last_row=last_row,
-                sheet_codename=sheet_codename,
                 log=_lg,
             )
         except Exception as e:
@@ -429,11 +471,11 @@ def add_holland_row_markers(
         if btn_count < expected:
             raise RuntimeError(
                 f"Создано кнопок {btn_count} из {expected}. "
-                "Проверьте bmp рядом с файлом и доверие VBA в Excel."
+                "Проверьте bmp рядом с файлом и «Доверять доступ к VBA» в Excel."
             )
 
         try:
-            _inject_marker_vba(wb, sheet_codename)
+            _inject_marker_vba(wb)
             _wire_marker_clicks(app, wb, log=_lg)
         except Exception as e:
             _lg(f"Голландия: клики по маркерам могут не работать — {e}")

@@ -160,8 +160,39 @@ def _prepare_work_copy(template: Path) -> Path:
     return work
 
 
-def _load_picture(app_api: object, image_path: str) -> object:
+_PICTURE_HELPER_MODULE = "cvPictureHelper"
+_PICTURE_HELPER_VBA = """
+Public Function cv_LoadPicture(path As String) As stdole.IPictureDisp
+    Set cv_LoadPicture = LoadPicture(path)
+End Function
+"""
+
+
+def _ensure_picture_helper_vba(wb: object) -> None:
+    vb = wb.api.VBProject
+    try:
+        mod = vb.VBComponents(_PICTURE_HELPER_MODULE)
+    except Exception:
+        mod = vb.VBComponents.Add(1)
+        mod.Name = _PICTURE_HELPER_MODULE
+    code_module = mod.CodeModule
+    existing = code_module.Lines(1, code_module.CountOfLines) if code_module.CountOfLines else ""
+    if "cv_LoadPicture" in existing:
+        return
+    if code_module.CountOfLines:
+        code_module.InsertLines(code_module.CountOfLines + 1, _PICTURE_HELPER_VBA)
+    else:
+        code_module.AddFromString(_PICTURE_HELPER_VBA)
+
+
+def _load_picture(app_api: object, image_path: str, *, wb: object | None = None) -> object:
     path = str(Path(image_path).resolve())
+    if wb is not None:
+        try:
+            _ensure_picture_helper_vba(wb)
+            return wb.app.api.Run(f"{_PICTURE_HELPER_MODULE}.cv_LoadPicture", path)
+        except Exception:
+            pass
     try:
         return app_api.LoadPicture(path)
     except Exception:
@@ -295,7 +326,7 @@ def _sync_row_checkboxes_com(
                 height,
             )
             btn = ole.Object
-            btn.Picture = _load_picture(app_api, img)
+            btn.Picture = _load_picture(app_api, img, wb=wb)
             btn.Caption = f"{prefix} {row} 0"
 
         color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
