@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ PIPELINE_STEPS: tuple[tuple[str, str], ...] = (
 # Пути зашиты в VBA; проверяем до запуска.
 VBA_INVOICE_DIR = Path(r"C:\Invoice\1")
 VBA_PRICES_DIR = Path(r"C:\Invoice\1\2")
+VBA_COPY_DIR = Path(r"C:\Invoice\1\copy")
+DEFAULT_SKLAD_EXPORT_DIR = Path(r"C:\Инвойсы склад")
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,28 @@ def _default_log(_msg: str) -> None:
     pass
 
 
-def _preflight(cfg: Auto1PipelineConfig, workbook_path: Path, log: LogFn) -> None:
+def _close_existing_excel(log: LogFn) -> None:
+    """Снимает зависшие EXCEL.EXE от прошлых прогонов (блокируют SaveAs в btnExport2)."""
+    import xlwings as xw
+
+    apps = list(xw.apps)
+    if not apps:
+        return
+    log(f"Закрываем {len(apps)} старый(х) Excel перед auto1…")
+    for app in apps:
+        try:
+            app.quit()
+        except Exception:
+            pass
+    time.sleep(1)
+
+
+def _preflight(
+    cfg: Auto1PipelineConfig,
+    workbook_path: Path,
+    sklad_export_dir: Path,
+    log: LogFn,
+) -> None:
     if not workbook_path.is_file():
         raise FileNotFoundError(f"Книга не найдена: {workbook_path}")
     if workbook_path.stat().st_size < 1024:
@@ -77,6 +101,11 @@ def _preflight(cfg: Auto1PipelineConfig, workbook_path: Path, log: LogFn) -> Non
     else:
         log(f"Файл цен: {prices[0].name}")
 
+    sklad_export_dir.mkdir(parents=True, exist_ok=True)
+    VBA_COPY_DIR.mkdir(parents=True, exist_ok=True)
+    log(f"Папка выгрузки: {sklad_export_dir}")
+    log(f"Копия для склада: {VBA_COPY_DIR}")
+
 
 CV_RUNNER_PREFIX = "cv_Run_"
 
@@ -103,6 +132,35 @@ def _ensure_sheet_runner(wb: object, codename: str, macro: str) -> str:
 
 def _try_run(app: object, spec: str) -> None:
     app.api.Run(spec)
+
+
+def _prepare_sklad_export(app: object, wb: object, log: LogFn) -> None:
+    """btnExport2 создаёт новую книгу и SaveAs — без папок/экрана часто «висит» с диалогом."""
+    api = app.api
+    app.screen_updating = True
+    api.DisplayAlerts = False
+    try:
+        api.AskToUpdateLinks = False
+    except Exception:
+        pass
+    try:
+        api.Calculation = -4135  # xlCalculationAutomatic
+    except Exception:
+        pass
+    wb_name = str(wb.name)
+    for book in list(app.books):
+        try:
+            name = str(book.name)
+        except Exception:
+            continue
+        if name == wb_name:
+            continue
+        if name.startswith("Голландия_1") or name.startswith("copy_Голландия"):
+            log(f"  закрываем лишнюю книгу: {name}")
+            try:
+                book.close(SaveChanges=False)
+            except Exception:
+                pass
 
 
 def _run_via_form_on_action(app: object, sheet: object, macro: str) -> str | None:
@@ -156,8 +214,9 @@ def _invoke_sheet_click_macro(
     )
     for spec in candidates:
         try:
+            log(f"  → Application.Run({spec!r})…")
             _try_run(app, spec)
-            log(f"  → Application.Run({spec!r})")
+            log(f"  → Application.Run({spec!r}) готов")
             return
         except Exception as e:
             errors.append(f"{spec}: {e!s}")
@@ -165,6 +224,7 @@ def _invoke_sheet_click_macro(
     try:
         runner = _ensure_sheet_runner(wb, codename, macro)
         spec = f"'{codename}'.{runner}"
+        log(f"  → Application.Run({spec!r})…")
         _try_run(app, spec)
         log(f"  → обёртка {runner} в модуле {codename}")
         return
@@ -185,6 +245,7 @@ def run_auto1_pipeline(
     workbook_path: Path,
     cfg: Auto1PipelineConfig,
     *,
+    sklad_export_dir: Path | None = None,
     log: LogFn | None = None,
 ) -> list[Auto1StepResult]:
     """
@@ -199,8 +260,10 @@ def run_auto1_pipeline(
 
     _lg = log or _default_log
     path = workbook_path.resolve()
+    export_dir = (sklad_export_dir or DEFAULT_SKLAD_EXPORT_DIR).resolve()
 
-    _preflight(cfg, path, _lg)
+    _preflight(cfg, path, export_dir, _lg)
+    _close_existing_excel(_lg)
 
     if cfg.backup_before_run:
         bak = path.with_name(path.name + cfg.backup_suffix)
@@ -245,10 +308,18 @@ def run_auto1_pipeline(
         _lg(f"Лист «{cfg.sheet_name}» (код VBA: {codename})")
 
         for label, macro in PIPELINE_STEPS:
+            step_t0 = time.monotonic()
             _lg(f"Шаг «{label}»: {macro}…")
+            if label == "For sklad":
+                _prepare_sklad_export(app, wb, _lg)
+                _lg(
+                    "Экспорт для склада (btnExport2) — обычно 30–120 с; "
+                    "если дольше 5 мин — откройте Excel (AUTO1_EXCEL_VISIBLE=1) "
+                    "или остановите прогон."
+                )
             _invoke_sheet_click_macro(app, wb, sheet, macro, _lg)
             done.append(Auto1StepResult(label=label, macro=macro))
-            _lg(f"Шаг «{label}» завершён.")
+            _lg(f"Шаг «{label}» завершён ({time.monotonic() - step_t0:.1f} с).")
 
         wb.save()
         _lg(f"Книга сохранена: {path.name}")

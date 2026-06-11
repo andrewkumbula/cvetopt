@@ -47,14 +47,27 @@ async def run_auto1_pipeline_job(job_id: str, env: EnvSettings) -> None:
 
     loop = asyncio.get_running_loop()
 
+    sklad_dir = resolve_holland_sklad_dir(
+        env,
+        effective_holland_sklad_dir_raw(
+            runtime,
+            yaml_dir=yaml_cfg.holland_translate.sklad_output_dir,
+        ),
+    )
+
     def _thread_log(msg: str) -> None:
-        asyncio.run_coroutine_threadsafe(job_log(job_id, msg), loop).result(timeout=120)
+        fut = asyncio.run_coroutine_threadsafe(job_log(job_id, msg), loop)
+        try:
+            fut.result(timeout=30)
+        except Exception:
+            pass
 
     try:
         await asyncio.to_thread(
             run_auto1_pipeline,
             wb_path,
             cfg,
+            sklad_export_dir=sklad_dir,
             log=_thread_log,
         )
     except Exception as e:
@@ -62,10 +75,6 @@ async def run_auto1_pipeline_job(job_id: str, env: EnvSettings) -> None:
         raise
 
     holland_cfg = yaml_cfg.holland_translate
-    sklad_dir = resolve_holland_sklad_dir(
-        env,
-        effective_holland_sklad_dir_raw(runtime, yaml_dir=holland_cfg.sklad_output_dir),
-    )
     newest = find_holland_export_file(sklad_dir)
 
     if holland_cfg.archive_previous_on_auto1:
