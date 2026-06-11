@@ -17,7 +17,12 @@ from pydantic import BaseModel, Field
 from cvetopt.core.settings import EnvSettings, MailConfig, _resolve_selection
 
 DEFAULT_BIFLORICA_DOWNLOAD_DIR = "data/downloads/biflorica"
-DEFAULT_BIFLORICA_ARCHIVE_DIR = "data/downloads/biflorica/архив"
+DEFAULT_BIFLORICA_ARCHIVE_DIR = (
+    r"C:\Инвойсы склад\архив"
+    if sys.platform == "win32"
+    else "data/downloads/biflorica/архив"
+)
+BIFLORICA_ARCHIVE_SUBDIR = "архив"
 DEFAULT_ECUADOR_TEMPLATE = "Invoice/3/Обработка/Прием товара Эквадор-4.xlsm"
 ECUADOR_TEMPLATE_FILENAME = "Прием товара Эквадор-4.xlsm"
 DEFAULT_ECUADOR_OUTPUT_DIR = r"D:\Склад ОБмен\Инвойсы Склад"
@@ -291,17 +296,43 @@ def resolve_biflorica_download_dir(env: EnvSettings, raw_dir: str) -> Path:
     return _resolve_dir(env, raw_dir, DEFAULT_BIFLORICA_DOWNLOAD_DIR)
 
 
+def effective_biflorica_archive_dir_raw(
+    runtime: RuntimeSettings,
+    *,
+    yaml_default: str = "",
+) -> str:
+    """Пустое поле в UI → архив рядом с папкой Эквадор/склад."""
+    text = (runtime.biflorica_archive_dir or "").strip()
+    if text:
+        return text
+    ecu = (runtime.ecuador_output_dir or "").strip()
+    if ecu:
+        return str(Path(ecu) / BIFLORICA_ARCHIVE_SUBDIR)
+    sklad = (runtime.holland_sklad_output_dir or "").strip()
+    if sklad:
+        return str(Path(sklad) / BIFLORICA_ARCHIVE_SUBDIR)
+    yaml_text = (yaml_default or "").strip()
+    if yaml_text:
+        return yaml_text
+    return DEFAULT_BIFLORICA_ARCHIVE_DIR
+
+
 def resolve_biflorica_archive_dir(
     env: EnvSettings,
     raw_dir: str,
     download_dir: Path | None = None,
+    *,
+    runtime: RuntimeSettings | None = None,
+    yaml_default: str = "",
 ) -> Path:
-    """Каталог архива Biflorica; пустое значение → <папка скачивания>/архив."""
+    """Каталог архива Biflorica (настраивается в UI; по умолчанию — Инвойсы склад/архив)."""
     text = (raw_dir or "").strip()
+    if not text and runtime is not None:
+        text = effective_biflorica_archive_dir_raw(runtime, yaml_default=yaml_default)
     if not text:
         base = download_dir or resolve_biflorica_download_dir(env, "")
-        return (base / "архив").resolve()
-    return _resolve_dir(env, raw_dir, DEFAULT_BIFLORICA_ARCHIVE_DIR)
+        return (base / BIFLORICA_ARCHIVE_SUBDIR).resolve()
+    return _resolve_dir(env, text, DEFAULT_BIFLORICA_ARCHIVE_DIR)
 
 
 def _is_biflorica_report_to_archive(entry: Path) -> bool:
@@ -443,17 +474,36 @@ def _archive_one_entry(src: Path, target: Path) -> str | None:
         return f"{src.name}: копия в архиве есть, исходник не удалён"
 
 
+def _biflorica_archive_candidate(
+    entry: Path,
+    *,
+    policy: str,
+    keep_order_ids: set[str],
+    keep_paths: set[Path],
+) -> bool:
+    order_id = order_id_from_biflorica_report(entry)
+    resolved = entry.resolve()
+    if policy == "unregistered_only":
+        return not (order_id and order_id in keep_order_ids)
+    if policy == "stale_registered":
+        # В архив всё, кроме отчётов, скачанных в текущей сессии (keep_paths).
+        return resolved not in keep_paths
+    raise ValueError(f"Неизвестная политика архива Biflorica: {policy}")
+
+
 def archive_biflorica_download_dir(
     download_dir: Path,
     archive_dir: Path,
     *,
     keep_order_ids: set[str] | None = None,
+    keep_paths: set[Path] | None = None,
+    policy: str = "unregistered_only",
 ) -> tuple[Path | None, list[str], list[str], list[str]]:
     """
-    Переносит в <папка архива>/<YYYY-MM-DD_HHMMSS>/ только xlsx/xls отчётов Biflorica
-    из корня папки скачивания (имя начинается с BiFlorica- или старый <order_id>__<дата>.xlsx).
-    Файлы заказов из keep_order_ids (реестр «уже скачано») не трогает.
-    Подпапки (Обработка, старые архивы, Задачи) и .xlsm/.lnk не трогает.
+    Переносит xlsx/xls отчётов Biflorica из корня папки скачивания прямо в папку архива.
+
+    policy=unregistered_only (до скачивания): в архив всё, чего нет в реестре keep_order_ids.
+    policy=stale_registered (после скачивания): в архив все отчёты Biflorica, кроме keep_paths (сессия).
     """
     if not download_dir.is_dir():
         return None, [], [], []
@@ -463,7 +513,8 @@ def archive_biflorica_download_dir(
     if archive_dir == download_dir:
         raise ValueError("Папка архива не может совпадать с папкой скачивания.")
 
-    keep = keep_order_ids or set()
+    keep_ids = keep_order_ids or set()
+    keep_resolved = {p.resolve() for p in (keep_paths or set())}
     to_move: list[Path] = []
     kept: list[str] = []
     for entry in download_dir.iterdir():
@@ -471,8 +522,12 @@ def archive_biflorica_download_dir(
             continue
         if not _is_biflorica_report_to_archive(entry):
             continue
-        order_id = order_id_from_biflorica_report(entry)
-        if order_id and order_id in keep:
+        if not _biflorica_archive_candidate(
+            entry,
+            policy=policy,
+            keep_order_ids=keep_ids,
+            keep_paths=keep_resolved,
+        ):
             kept.append(entry.name)
             continue
         to_move.append(entry)
@@ -480,9 +535,8 @@ def archive_biflorica_download_dir(
     if not to_move:
         return None, [], [], kept
 
+    archive_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    dest_dir = archive_dir / stamp
-    dest_dir.mkdir(parents=True, exist_ok=True)
 
     moved: list[str] = []
     warnings: list[str] = []
@@ -501,7 +555,7 @@ def archive_biflorica_download_dir(
             )
     access_hint_shown = False
     for src in sorted(to_move, key=lambda p: p.name.lower()):
-        target = _archive_target_path(dest_dir, src, stamp)
+        target = _archive_target_path(archive_dir, src, stamp)
         if not os.access(src, os.R_OK):
             if not access_hint_shown:
                 import getpass
@@ -522,7 +576,7 @@ def archive_biflorica_download_dir(
         except OSError as e:
             warnings.append(f"{src.name}: не удалось архивировать — {e}")
 
-    return dest_dir, moved, warnings, kept
+    return archive_dir, moved, warnings, kept
 
 
 def validate_biflorica_download_dir(env: EnvSettings, raw_dir: str) -> str | None:
@@ -549,6 +603,8 @@ def validate_biflorica_archive_dir(
     env: EnvSettings,
     raw_archive_dir: str,
     raw_download_dir: str,
+    *,
+    runtime: RuntimeSettings | None = None,
 ) -> str | None:
     download = validate_biflorica_download_dir(env, raw_download_dir)
     if download:
@@ -557,7 +613,12 @@ def validate_biflorica_archive_dir(
         return None
     try:
         dl_path = resolve_biflorica_download_dir(env, raw_download_dir)
-        arch_path = resolve_biflorica_archive_dir(env, raw_archive_dir, dl_path)
+        arch_path = resolve_biflorica_archive_dir(
+            env,
+            raw_archive_dir,
+            dl_path,
+            runtime=runtime,
+        )
     except (OSError, ValueError) as e:
         return f"архива: некорректный путь — {e}"
     if arch_path.exists() and not arch_path.is_dir():

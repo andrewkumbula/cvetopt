@@ -46,6 +46,7 @@ async def run_holland_translate_job(job_id: str, env: EnvSettings) -> None:
         sklad_output_dir=sklad_dir,
         dictionary_path=dict_path,
         on_date=date.today(),
+        append_missing_to_dictionary=cfg.append_missing_to_dictionary,
         log=_thread_log,
     )
     if export_path is None:

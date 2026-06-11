@@ -175,6 +175,10 @@ class HollandTranslateConfig(BaseModel):
     enabled: bool = True
     sklad_output_dir: str = r"C:\Инвойсы склад"
     dictionary_path: str = r"C:\Invoice\Словарь.xls"
+    # После auto1 «for sklad» — старые Голландия_1_*.xlsx в архив (папка как у Biflorica).
+    archive_previous_on_auto1: bool = True
+    # Без перевода в словаре — дописать Description в колонку B (C пустая).
+    append_missing_to_dictionary: bool = True
 
 
 class EcuadorCreateConfig(BaseModel):

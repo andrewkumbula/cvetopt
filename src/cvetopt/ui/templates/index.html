@@ -182,6 +182,7 @@
       </form>
       <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
         Пути — в <strong>Настройки</strong> (словарь и папка <code>Голландия_1_*.xlsx</code>).
+        Без перевода — Description дописывается в <code>Словарь.xls</code> (кол. B, C пустая).
       </p>
     </div>
 
@@ -242,15 +243,15 @@
         />
         <button id="pick-bif-dir-btn" type="button" data-pick-target="bif_download_dir">Выбрать…</button>
       </div>
-      <label for="bif_archive_dir" class="muted">Biflorica, папка архива:</label>
+      <label for="bif_archive_dir" class="muted">Biflorica, архив старых отчётов:</label>
       <div class="path-row">
         <input
           id="bif_archive_dir"
           class="input-path"
           type="text"
           name="biflorica_archive_dir"
-          placeholder="data/downloads/biflorica/архив или полный путь"
-          value="{{ runtime_settings.biflorica_archive_dir|default('data/downloads/biflorica/архив') }}"
+          placeholder="C:\Инвойсы склад\архив (пусто — рядом с папкой Эквадор)"
+          value="{{ runtime_settings.biflorica_archive_dir|default('C:\\Инвойсы склад\\архив') }}"
           spellcheck="false"
         />
         <button id="pick-bif-archive-btn" type="button" data-pick-target="bif_archive_dir">Выбрать…</button>
@@ -386,10 +387,9 @@
     </div>
     <p class="muted settings-hint">
       Сохранённые значения будут использоваться по умолчанию после перезапуска.
-      Отчёты Biflorica сохраняются прямо в папку скачивания. Перед новым прогоном
-      в архив уходят только старые отчёты Biflorica без записи в реестре
-      (файлы с префиксом <code>BiFlorica-</code> в корне папки),
-      уже скачанные заказы в папке остаются.
+      Отчёты Biflorica — в папку скачивания. Перед прогоном в архив уходят «лишние» xlsx;
+      при скачивании нового отчёта старые <code>BiFlorica-*.xlsx</code> переносятся в архив.
+      Архив по умолчанию: <code>C:\Инвойсы склад\архив</code> (настраивается выше).
       Эквадор: кнопка <strong>«Эквадор: создать файл (тест)»</strong> на вкладке Запуск
       (автоматически после Biflorica сейчас выключено — <code>ecuador_create.auto_after_biflorica: false</code>).
     </p>

@@ -142,6 +142,7 @@ async def api_runtime_settings_update(request: Request) -> JSONResponse:
             env,
             settings.biflorica_archive_dir,
             settings.biflorica_download_dir,
+            runtime=settings,
         )
         if arch_err:
             return JSONResponse({"error": arch_err}, status_code=422)

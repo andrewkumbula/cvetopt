@@ -393,12 +393,16 @@ async def run_biflorica_job(
     download_dir = resolve_biflorica_download_dir(env, runtime.biflorica_download_dir)
     download_dir.mkdir(parents=True, exist_ok=True)
     archive_base = resolve_biflorica_archive_dir(
-        env, runtime.biflorica_archive_dir, download_dir
+        env,
+        runtime.biflorica_archive_dir,
+        download_dir,
+        runtime=runtime,
     )
     archive_base.mkdir(parents=True, exist_ok=True)
 
     registry = DownloadRegistry(registry_path)
     downloaded_ids = registry.load()
+    session_downloaded_paths: set[Path] = set()
 
     await raise_if_cancelled(job_id)
 
@@ -408,28 +412,15 @@ async def run_biflorica_job(
             f"Архив: Windows-пользователь процесса «{getpass.getuser()}» "
             f"(запускайте cvetopt.bat под тем же пользователем, что работает с C:\\Invoice)",
         )
-    try:
-        archive_dir, archived_names, archive_warnings, kept_names = (
-            archive_biflorica_download_dir(
-                download_dir,
-                archive_base,
-                keep_order_ids=downloaded_ids,
-            )
-        )
-        if kept_names:
-            await job_log(
-                job_id,
-                f"Архив: оставлено в папке (уже в реестре): {len(kept_names)}",
-            )
-        if archive_dir is not None:
-            await job_log(
-                job_id,
-                f"В архив перенесено: {len(archived_names)} → {archive_dir}",
-            )
-            for warn in archive_warnings:
-                await job_log(job_id, f"Архив: {warn}")
-    except Exception as e:
-        await job_log(job_id, f"Архивирование пропущено: {e}")
+    await job_log(job_id, f"Архив Biflorica: {archive_base}")
+    await _archive_biflorica_reports(
+        job_id,
+        download_dir,
+        archive_base,
+        keep_order_ids=downloaded_ids,
+        policy="unregistered_only",
+        label="Архив (до скачивания)",
+    )
     await job_log(job_id, f"Папка скачивания: {download_dir}")
     await job_log(job_id, f"Уже в реестре заказов: {len(downloaded_ids)}")
 
@@ -556,7 +547,17 @@ async def run_biflorica_job(
                 registry.add(order.order_id)
                 downloaded_ids.add(order.order_id)
                 await job_manager.add_downloaded(job_id, str(dest))
+                session_downloaded_paths.add(dest.resolve())
                 await lg(f"Сохранено: {dest}")
+                await _archive_biflorica_reports(
+                    job_id,
+                    download_dir,
+                    archive_base,
+                    keep_order_ids=downloaded_ids,
+                    keep_paths=session_downloaded_paths,
+                    policy="stale_registered",
+                    label="Архив (старые отчёты)",
+                )
                 ecuador_auto = env.yaml_config().ecuador_create.auto_after_biflorica
                 if not ecuador_auto:
                     pass
@@ -629,7 +630,52 @@ async def run_biflorica_job(
                         logger.exception("ecuador create failed")
                 await asyncio.sleep(random.uniform(1.0, 3.0))
 
+            if session_downloaded_paths:
+                await _archive_biflorica_reports(
+                    job_id,
+                    download_dir,
+                    archive_base,
+                    keep_order_ids=downloaded_ids,
+                    keep_paths=session_downloaded_paths,
+                    policy="stale_registered",
+                    label="Архив (после скачивания)",
+                )
             await lg("Готово.")
         finally:
             await context.close()
             await browser.close()
+
+
+async def _archive_biflorica_reports(
+    job_id: str,
+    download_dir: Path,
+    archive_base: Path,
+    *,
+    keep_order_ids: set[str],
+    keep_paths: set[Path] | None = None,
+    policy: str,
+    label: str,
+) -> None:
+    try:
+        archive_dir, archived_names, archive_warnings, kept_names = (
+            archive_biflorica_download_dir(
+                download_dir,
+                archive_base,
+                keep_order_ids=keep_order_ids,
+                keep_paths=keep_paths,
+                policy=policy,
+            )
+        )
+        if kept_names:
+            await job_log(job_id, f"{label}: оставлено в папке: {len(kept_names)}")
+        if archive_dir is not None:
+            await job_log(
+                job_id,
+                f"{label}: перенесено {len(archived_names)} → {archive_dir}",
+            )
+            for warn in archive_warnings:
+                await job_log(job_id, f"{label}: {warn}")
+        elif policy == "stale_registered":
+            await job_log(job_id, f"{label}: старых отчётов нет")
+    except Exception as e:
+        await job_log(job_id, f"{label}: пропущено — {e}")

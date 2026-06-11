@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import os
 import re
 import sys
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
+from cvetopt.core.runtime_settings import _archive_one_entry, _archive_target_path
+
 from cvetopt.invoice.description_dictionary import (
+    append_missing_descriptions,
     load_description_dictionary,
     lookup_translation,
 )
@@ -61,6 +65,75 @@ def find_holland_export_file(
     return items[0] if items else None
 
 
+def archive_stale_holland_exports(
+    sklad_dir: Path,
+    archive_dir: Path,
+    *,
+    keep_path: Path | None = None,
+    log: LogFn | None = None,
+) -> tuple[Path | None, list[str], list[str]]:
+    """
+    Оставляет один файл Голландия_1_*.xlsx (самый свежий или keep_path),
+    остальные переносит прямо в папку архива.
+    """
+    _lg = log or _default_log
+    if not sklad_dir.is_dir():
+        return None, [], []
+
+    archive_dir = archive_dir.resolve()
+    sklad_dir = sklad_dir.resolve()
+    if archive_dir == sklad_dir:
+        raise ValueError("Папка архива не может совпадать с папкой Голландия.")
+
+    candidates: list[Path] = []
+    for path in holland_export_candidates(sklad_dir):
+        try:
+            path.resolve().relative_to(archive_dir)
+        except ValueError:
+            candidates.append(path)
+
+    if not candidates:
+        return None, [], []
+
+    keep = (keep_path or candidates[0]).resolve()
+    to_move = [path for path in candidates if path.resolve() != keep]
+    if not to_move:
+        _lg("Голландия: старых файлов для архива нет")
+        return None, [], []
+
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+    moved: list[str] = []
+    warnings: list[str] = []
+    if sys.platform == "win32" and not os.access(archive_dir, os.W_OK):
+        import getpass
+
+        warnings.append(
+            f"Папка архива {archive_dir}: нет записи для «{getpass.getuser()}»."
+        )
+
+    for src in sorted(to_move, key=lambda p: p.name.lower()):
+        target = _archive_target_path(archive_dir, src, stamp)
+        if not os.access(src, os.R_OK):
+            warnings.append(f"{src.name}: пропуск (нет чтения)")
+            continue
+        try:
+            warn = _archive_one_entry(src, target)
+            moved.append(src.name)
+            if warn:
+                warnings.append(warn)
+        except OSError as e:
+            warnings.append(f"{src.name}: не удалось архивировать — {e}")
+
+    if moved:
+        _lg(f"Голландия: в архив {len(moved)} → {archive_dir}")
+    for warn in warnings:
+        _lg(f"Голландия (архив): {warn}")
+
+    return (archive_dir if moved else None), moved, warnings
+
+
 def _find_description_columns(header: dict[str, str]) -> tuple[str, str] | None:
     for col, val in header.items():
         if str(val).strip().casefold() == "description":
@@ -73,7 +146,7 @@ def _build_translation_plan(
     dictionary: dict[str, str],
     *,
     log: LogFn,
-) -> tuple[str, str, dict[str, str | None], int, int, int]:
+) -> tuple[str, str, dict[str, str | None], list[str], int, int, int]:
     grid = read_xlsx_grid(export_path)
     rows = grid_by_row(grid)
     header = rows.get(1, {})
@@ -86,6 +159,7 @@ def _build_translation_plan(
     log(f"Description → колонка {trans_col} (рядом с {desc_col})")
 
     updates: dict[str, str | None] = {}
+    missing_texts: list[str] = []
     translated = 0
     missing = 0
     total = 0
@@ -104,7 +178,8 @@ def _build_translation_plan(
         else:
             updates[ref] = None
             missing += 1
-    return desc_col, trans_col, updates, translated, missing, total
+            missing_texts.append(text)
+    return desc_col, trans_col, updates, missing_texts, translated, missing, total
 
 
 def _translate_via_xlwings(
@@ -159,6 +234,7 @@ def translate_holland_export(
     export_path: Path,
     dictionary_path: Path,
     *,
+    append_missing_to_dictionary: bool = True,
     log: LogFn | None = None,
 ) -> tuple[int, int, int]:
     """
@@ -173,9 +249,20 @@ def translate_holland_export(
 
     _lg(f"Словарь: {len(dictionary)} записей из {dictionary_path.name}")
 
-    _desc_col, trans_col, updates, translated, missing, total = _build_translation_plan(
-        export_path, dictionary, log=_lg
+    _desc_col, trans_col, updates, missing_texts, translated, missing, total = (
+        _build_translation_plan(export_path, dictionary, log=_lg)
     )
+
+    if append_missing_to_dictionary and missing_texts:
+        try:
+            append_missing_descriptions(
+                dictionary_path,
+                missing_texts,
+                dictionary=dictionary,
+                log=_lg,
+            )
+        except Exception as e:
+            _lg(f"Словарь: не удалось дописать без перевода — {e}")
 
     if sys.platform == "win32":
         try:
@@ -206,6 +293,7 @@ def postprocess_holland_after_auto1(
     sklad_output_dir: Path,
     dictionary_path: Path,
     on_date: date | None = None,
+    append_missing_to_dictionary: bool = True,
     log: LogFn | None = None,
 ) -> Path | None:
     """Ищет свежий Голландия_1_*.xlsx в папке склада и переводит Description."""
@@ -214,5 +302,10 @@ def postprocess_holland_after_auto1(
     if export_file is None:
         _lg(f"Файл Голландия_1_*.xlsx не найден в {sklad_output_dir}")
         return None
-    translate_holland_export(export_file, dictionary_path, log=_lg)
+    translate_holland_export(
+        export_file,
+        dictionary_path,
+        append_missing_to_dictionary=append_missing_to_dictionary,
+        log=_lg,
+    )
     return export_file
