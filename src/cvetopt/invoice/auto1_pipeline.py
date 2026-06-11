@@ -28,6 +28,16 @@ VBA_PRICES_DIR = Path(r"C:\Invoice\1\2")
 VBA_COPY_DIR = Path(r"C:\Invoice\1\copy")
 DEFAULT_SKLAD_EXPORT_DIR = Path(r"C:\Инвойсы склад")
 
+# auto1: данные с 8-й строки; Sort — A:BB по Description (F).
+_AUTO1_DATA_FIRST_ROW = 8
+_AUTO1_LAST_COL = 54  # BB
+_COL_DESCRIPTION = 6  # F
+_PASTE_VALUE_COL_RANGES = ((16, 17), (48, 54))  # P:Q, AV:BB
+_XL_UP = -4162
+_XL_PASTE_VALUES = -4163
+_XL_ASCENDING = 1
+_XL_SORT_NO_HEADER = 2
+
 
 @dataclass(frozen=True)
 class Auto1StepResult:
@@ -161,6 +171,44 @@ def _run_with_heartbeat(label: str, action: Callable[[], None], log: LogFn) -> N
         action()
     finally:
         stop.set()
+
+
+def _auto1_last_row(sheet: object) -> int:
+    return int(
+        sheet.api.Cells(sheet.api.Rows.Count, _COL_DESCRIPTION).End(_XL_UP).Row
+    )
+
+
+def _sort_auto1_sheet(sheet: object, log: LogFn) -> None:
+    """
+    Эквивалент btnSort_Click без VBA: формулы P:Q и AV:BB → значения, сортировка A:BB по F.
+    btnSort_Click на сервере часто зависает (PasteSpecial/Sortirovka в .xls).
+    """
+    last_row = _auto1_last_row(sheet)
+    if last_row < _AUTO1_DATA_FIRST_ROW:
+        log("Sort: нет строк данных — пропуск")
+        return
+    log(f"Sort: P:Q и AV:BB → значения, сортировка F, строки {_AUTO1_DATA_FIRST_ROW}–{last_row}")
+    api = sheet.api
+    app_api = api.Application
+    block = api.Range(
+        api.Cells(_AUTO1_DATA_FIRST_ROW, 1),
+        api.Cells(last_row, _AUTO1_LAST_COL),
+    )
+    for col_start, col_end in _PASTE_VALUE_COL_RANGES:
+        part = api.Range(
+            api.Cells(_AUTO1_DATA_FIRST_ROW, col_start),
+            api.Cells(last_row, col_end),
+        )
+        part.Copy()
+        part.PasteSpecial(Paste=_XL_PASTE_VALUES)
+    app_api.CutCopyMode = False
+    key = api.Range(
+        api.Cells(_AUTO1_DATA_FIRST_ROW, _COL_DESCRIPTION),
+        api.Cells(last_row, _COL_DESCRIPTION),
+    )
+    block.Sort(Key1=key, Order1=_XL_ASCENDING, Header=_XL_SORT_NO_HEADER)
+    log("Sort: готово (Python)")
 
 
 def _prepare_sklad_export(app: object, wb: object, log: LogFn) -> None:
@@ -346,21 +394,34 @@ def run_auto1_pipeline(
 
         for label, macro in PIPELINE_STEPS:
             step_t0 = time.monotonic()
-            _lg(f"Шаг «{label}»: {macro}…")
             _prepare_macro_step(app)
-            if label == "For sklad":
-                _prepare_sklad_export(app, wb, _lg)
-                _lg(
-                    "Экспорт для склада (btnExport2) — обычно 30–120 с; "
-                    "если дольше 5 мин — откройте Excel (AUTO1_EXCEL_VISIBLE=1) "
-                    "или остановите прогон."
+            if label == "Sort":
+                _lg("Шаг «Sort»: сортировка по Description (Python)…")
+                _run_with_heartbeat(
+                    label,
+                    lambda: _sort_auto1_sheet(sheet, _lg),
+                    _lg,
                 )
-            _run_with_heartbeat(
-                label,
-                lambda m=macro: _invoke_sheet_click_macro(app, wb, sheet, m, _lg),
-                _lg,
+            else:
+                _lg(f"Шаг «{label}»: {macro}…")
+                if label == "For sklad":
+                    _prepare_sklad_export(app, wb, _lg)
+                    _lg(
+                        "Экспорт для склада (btnExport2) — обычно 30–120 с; "
+                        "если дольше 5 мин — откройте Excel (AUTO1_EXCEL_VISIBLE=1) "
+                        "или остановите прогон."
+                    )
+                _run_with_heartbeat(
+                    label,
+                    lambda m=macro: _invoke_sheet_click_macro(app, wb, sheet, m, _lg),
+                    _lg,
+                )
+            done.append(
+                Auto1StepResult(
+                    label=label,
+                    macro="python_sort" if label == "Sort" else macro,
+                )
             )
-            done.append(Auto1StepResult(label=label, macro=macro))
             _lg(f"Шаг «{label}» завершён ({time.monotonic() - step_t0:.1f} с).")
 
         wb.save()
