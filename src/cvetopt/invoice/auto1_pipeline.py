@@ -423,6 +423,10 @@ def run_auto1_pipeline(
                 )
             )
             _lg(f"Шаг «{label}» завершён ({time.monotonic() - step_t0:.1f} с).")
+            if label == "For sklad":
+                from cvetopt.invoice.holland_markers import fix_holland_export_after_auto1
+
+                fix_holland_export_after_auto1(app, export_dir, _lg)
 
         wb.save()
         _lg(f"Книга сохранена: {path.name}")

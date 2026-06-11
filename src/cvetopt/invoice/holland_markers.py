@@ -24,8 +24,10 @@ _CV_SYNC_MACRO = "cv_SyncHollandMarkers"
 _CV_CLICK_MACRO = "cvHollandMarkerClick"
 _MARKER_MODULE = "cvHollandMarkers"
 _OBSOLETE_MARKER_CLASS = "cvHollandMarkerHandler"
-_XL_BUTTON_CONTROL = 0
+_XL_CHECKBOX = 1
 _XL_PASTE_VALUES = -4163
+_MSO_SHAPE_RECTANGLE = 1
+_XL_MOVE_AND_SIZE = 1
 
 _CV_SYNC_VBA = """
 Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
@@ -34,6 +36,7 @@ Public Sub cv_SyncHollandMarkers(aFirst As Long, aLast As Long)
     Dim aLastCol As Long
     Set aSheet = ThisWorkbook.Worksheets(1)
     Application.ScreenUpdating = False
+    Call cvDelExportCheckboxes(aSheet.Name)
     Call cvDelHollandMarkerButtons(aSheet.Name)
     aLastCol = aSheet.Range("C1").End(xlToRight).Column
     With aSheet
@@ -55,13 +58,26 @@ Private Sub cvAddHollandMarkerBtn(aSheet As Worksheet, aRow As Long, aCol As Lon
     Dim btn As Shape
     Dim cell As Range
     Set cell = aSheet.Cells(aRow, aCol)
-    Set btn = aSheet.Shapes.AddFormControl(0, cell.Left, cell.Top, cell.Width, cell.Height)
+    Set btn = aSheet.Shapes.AddShape(1, cell.Left, cell.Top, cell.Width, cell.Height)
     btn.Name = "cvM_" & aPrefix & "_" & aRow & "_0"
+    btn.Placement = xlMoveAndSize
     btn.OnAction = "cvHollandMarkerClick"
-    btn.TextFrame.Characters.Text = ""
-    btn.Fill.Visible = True
+    btn.Fill.Visible = msoTrue
     btn.Fill.ForeColor.RGB = aColor
-    btn.Line.Visible = False
+    btn.Line.Visible = msoFalse
+End Sub
+
+Public Sub cvDelExportCheckboxes(aSheet As String)
+    Dim ws As Worksheet
+    Dim shp As Shape
+    Dim i As Long
+    Set ws = ThisWorkbook.Sheets(aSheet)
+    For i = ws.Shapes.Count To 1 Step -1
+        Set shp = ws.Shapes(i)
+        On Error Resume Next
+        If shp.FormControlType = 1 Then shp.Delete
+        On Error GoTo 0
+    Next i
 End Sub
 
 Public Sub cvDelHollandMarkerButtons(aSheet As String)
@@ -72,9 +88,7 @@ Public Sub cvDelHollandMarkerButtons(aSheet As String)
     Set ws = ThisWorkbook.Sheets(aSheet)
     For i = ws.Shapes.Count To 1 Step -1
         Set shp = ws.Shapes(i)
-        If shp.FormControlType = 0 Then
-            If Left(shp.Name, 3) = "cvM" Then shp.Delete
-        End If
+        If Left(shp.Name, 4) = "cvM_" Then shp.Delete
     Next i
     For Each aButton In ws.OLEObjects
         If InStr(1, aButton.ClassType, "CommandButton", vbTextCompare) > 0 Then
@@ -167,7 +181,8 @@ def _ensure_std_module(vbproject: object, name: str, code: str) -> None:
         and _CV_CLICK_MACRO in existing
         and "MSForms" not in existing
         and "Type = 12" not in existing
-        and 'btn.Name = "cvM_"' in existing
+        and "AddShape(1" in existing
+        and "cvDelExportCheckboxes" in existing
     ):
         return
     if code_module.CountOfLines:
@@ -175,8 +190,21 @@ def _ensure_std_module(vbproject: object, name: str, code: str) -> None:
     code_module.AddFromString(code)
 
 
-def _freeze_sheet_values(ws: object) -> None:
+def _calculate_workbook(app: object | None) -> None:
+    if app is None:
+        return
+    api = app.api
+    for fn in ("CalculateFullRebuild", "CalculateFull", "Calculate"):
+        try:
+            getattr(api, fn)()
+            return
+        except Exception:
+            continue
+
+
+def _freeze_sheet_values(ws: object, *, app: object | None = None) -> None:
     """Формулы btnExport2 (ссылки на Auto_new.xls) → значения до вставки колонок A–B."""
+    _calculate_workbook(app)
     used = ws.api.UsedRange
     if used is None:
         return
@@ -184,6 +212,53 @@ def _freeze_sheet_values(ws: object) -> None:
     used.Copy()
     used.PasteSpecial(Paste=_XL_PASTE_VALUES)
     app_api.CutCopyMode = False
+
+
+def _delete_export_checkboxes(sheet: object) -> int:
+    """Чекбоксы из btnExport2 (колонка L и др.) — не нужны с маркерами A–B."""
+    removed = 0
+    shapes = sheet.api.Shapes
+    for i in range(int(shapes.Count), 0, -1):
+        shp = shapes.Item(i)
+        try:
+            if int(shp.FormControlType) == _XL_CHECKBOX:
+                shp.Delete()
+                removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) -> None:
+    """Сразу после btnExport2: пересчёт пока Auto_new открыт → значения, без чекбоксов."""
+    candidates = [
+        p
+        for p in export_dir.glob("Голландия_1_*.xlsx")
+        if p.is_file()
+    ]
+    if not candidates:
+        log("Голландия: файл экспорта не найден — постобработка пропущена")
+        return
+    export_path = max(candidates, key=lambda p: p.stat().st_mtime)
+    wb_holland: object | None = None
+    for book in app.books:
+        if str(book.name).casefold() == export_path.name.casefold():
+            wb_holland = book
+            break
+    opened_here = False
+    if wb_holland is None:
+        wb_holland = app.books.open(str(export_path), update_links=3)
+        opened_here = True
+    ws = wb_holland.sheets[0]
+    _freeze_sheet_values(ws, app=app)
+    removed = _delete_export_checkboxes(ws)
+    wb_holland.save()
+    if opened_here:
+        wb_holland.close()
+    log(
+        f"Голландия: {export_path.name} — формулы → значения, "
+        f"удалено чекбоксов: {removed}"
+    )
 
 
 def _missing_marker_assets(assets_dir: Path) -> list[str]:
@@ -203,10 +278,10 @@ def _delete_holland_marker_buttons(sheet: object) -> None:
                 shp.Delete()
         except Exception:
             pass
-    _delete_row_command_buttons(sheet)
+    _delete_row_command_buttons(sheet)  # legacy ActiveX
 
 
-def _add_form_marker_button(
+def _add_shape_marker(
     sheet: object,
     *,
     row: int,
@@ -216,8 +291,8 @@ def _add_form_marker_button(
     macro: str,
 ) -> None:
     cell = sheet.api.Cells(row, col)
-    shp = sheet.api.Shapes.AddFormControl(
-        _XL_BUTTON_CONTROL,
+    shp = sheet.api.Shapes.AddShape(
+        _MSO_SHAPE_RECTANGLE,
         float(cell.Left),
         float(cell.Top),
         float(cell.Width),
@@ -225,20 +300,14 @@ def _add_form_marker_button(
     )
     shp.Name = f"cvM_{prefix}_{row}_0"
     shp.OnAction = macro
-    shp.TextFrame.Characters().Text = ""
+    shp.Placement = _XL_MOVE_AND_SIZE
     shp.Fill.Visible = True
     shp.Fill.ForeColor.RGB = color_rgb
     shp.Line.Visible = False
 
 
 def _is_holland_marker_shape(shp: object) -> bool:
-    try:
-        if int(shp.FormControlType) != _XL_BUTTON_CONTROL:
-            return False
-    except Exception:
-        return False
-    name = str(shp.Name)
-    return name.startswith("cvM_") or name.startswith("cvM")
+    return str(shp.Name).startswith("cvM_")
 
 
 def _count_marker_buttons(sheet: object) -> int:
@@ -286,11 +355,12 @@ def _sync_holland_markers_com(
     click_macro = _CV_CLICK_MACRO
     sheet.api.Columns("A:A").ColumnWidth = 3.5
     sheet.api.Columns("B:B").ColumnWidth = 3.5
+    _delete_export_checkboxes(sheet)
     _delete_holland_marker_buttons(sheet)
     last_col = _holland_last_col(sheet)
 
     for row in range(first_row, last_row + 1):
-        _add_form_marker_button(
+        _add_shape_marker(
             sheet,
             row=row,
             col=1,
@@ -298,7 +368,7 @@ def _sync_holland_markers_com(
             color_rgb=_ole_rgb(255, 0, 0),
             macro=click_macro,
         )
-        _add_form_marker_button(
+        _add_shape_marker(
             sheet,
             row=row,
             col=2,
@@ -379,9 +449,8 @@ def add_holland_row_markers(
 
     missing = _missing_marker_assets(assets_dir)
     if missing:
-        raise FileNotFoundError(
-            f"Нет bmp для маркеров в {assets_dir}: {', '.join(missing)} "
-            "(скопируйте из папки шаблона Эквадор)."
+        _lg(
+            f"Голландия: bmp нет ({', '.join(missing)}) — маркеры только цветные квадраты"
         )
 
     last_row = _last_data_row_xlsx(export_path)
@@ -390,7 +459,8 @@ def add_holland_row_markers(
         return export_path
 
     assets_target = export_path.parent
-    _copy_checkbox_assets(assets_dir, assets_target)
+    if not missing:
+        _copy_checkbox_assets(assets_dir, assets_target)
     xlsm_path = export_path.with_suffix(".xlsm")
 
     import xlwings as xw
@@ -401,10 +471,13 @@ def add_holland_row_markers(
         app = xw.App(visible=False, add_book=False)
         app.display_alerts = False
         app.api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
-        wb = app.books.open(str(export_path), update_links=False)
+        wb = app.books.open(str(export_path), update_links=3)
         ws = wb.sheets[0]
-        _freeze_sheet_values(ws)
-        _lg("Голландия: формулы заменены значениями (без #ССЫЛКА!).")
+        _freeze_sheet_values(ws, app=app)
+        removed = _delete_export_checkboxes(ws)
+        _lg(
+            f"Голландия: формулы → значения; удалено старых чекбоксов: {removed}"
+        )
         need_insert = export_path.suffix.lower() == ".xlsx" and not _marker_columns_already(ws)
         if need_insert:
             ws.api.Columns("A:B").Insert()
@@ -417,7 +490,8 @@ def add_holland_row_markers(
             xlsm_path = export_path
 
         assets_target = xlsm_path.parent
-        _copy_checkbox_assets(assets_dir, assets_target)
+        if not missing:
+            _copy_checkbox_assets(assets_dir, assets_target)
 
         try:
             _ensure_picture_helper_vba(wb)
