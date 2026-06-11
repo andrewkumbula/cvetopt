@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -134,6 +135,34 @@ def _try_run(app: object, spec: str) -> None:
     app.api.Run(spec)
 
 
+def _prepare_macro_step(app: object) -> None:
+    """Private-макросы и сортировка часто «зависают» при ScreenUpdating=False."""
+    app.screen_updating = True
+    api = app.api
+    api.DisplayAlerts = False
+    try:
+        api.EnableEvents = True
+    except Exception:
+        pass
+
+
+def _run_with_heartbeat(label: str, action: Callable[[], None], log: LogFn) -> None:
+    stop = threading.Event()
+
+    def _beat() -> None:
+        tick = 0
+        while not stop.wait(20):
+            tick += 20
+            log(f"  … шаг «{label}» выполняется ({tick} с)")
+
+    worker = threading.Thread(target=_beat, daemon=True)
+    worker.start()
+    try:
+        action()
+    finally:
+        stop.set()
+
+
 def _prepare_sklad_export(app: object, wb: object, log: LogFn) -> None:
     """btnExport2 создаёт новую книгу и SaveAs — без папок/экрана часто «висит» с диалогом."""
     api = app.api
@@ -163,19 +192,27 @@ def _prepare_sklad_export(app: object, wb: object, log: LogFn) -> None:
                 pass
 
 
+def _on_action_matches_macro(on_action: str, macro: str) -> bool:
+    text = on_action.strip()
+    if not text:
+        return False
+    if text == macro:
+        return True
+    return text.endswith(f".{macro}") or text.endswith(f"!{macro}")
+
+
 def _run_via_form_on_action(app: object, sheet: object, macro: str) -> str | None:
-    """Кнопки Form Control с OnAction (не ActiveX)."""
+    """Кнопки Form Control с OnAction (запасной путь)."""
     for i in range(1, int(sheet.api.Shapes.Count) + 1):
         shp = sheet.api.Shapes(i)
         try:
             on_action = (shp.OnAction or "").strip()
         except Exception:
             on_action = ""
-        if not on_action:
+        if not _on_action_matches_macro(on_action, macro):
             continue
-        if macro in on_action or on_action.endswith(macro):
-            _try_run(app, on_action)
-            return on_action
+        _try_run(app, on_action)
+        return on_action
     return None
 
 
@@ -195,14 +232,6 @@ def _invoke_sheet_click_macro(
     sheet_name = str(sheet.name)
     wb_name = str(wb.name)
     errors: list[str] = []
-
-    try:
-        via = _run_via_form_on_action(app, sheet, macro)
-        if via:
-            log(f"  → OnAction: {via}")
-            return
-    except Exception as e:
-        errors.append(f"OnAction: {e}")
 
     candidates = (
         f"{codename}.{macro}",
@@ -230,6 +259,14 @@ def _invoke_sheet_click_macro(
         return
     except Exception as e:
         errors.append(f"обёртка VBA: {e!s}")
+
+    try:
+        via = _run_via_form_on_action(app, sheet, macro)
+        if via:
+            log(f"  → OnAction: {via}")
+            return
+    except Exception as e:
+        errors.append(f"OnAction: {e}")
 
     hint = (
         "Обработчики кнопок (btnScan_Click и др.) в книге объявлены как Private Sub. "
@@ -286,7 +323,7 @@ def run_auto1_pipeline(
     try:
         app = xw.App(visible=visible, add_book=False)
         app.display_alerts = False
-        app.screen_updating = False
+        app.screen_updating = True
         app.api.EnableEvents = True
         # 1 = msoAutomationSecurityLow — иначе Run может блокироваться политикой.
         try:
@@ -310,6 +347,7 @@ def run_auto1_pipeline(
         for label, macro in PIPELINE_STEPS:
             step_t0 = time.monotonic()
             _lg(f"Шаг «{label}»: {macro}…")
+            _prepare_macro_step(app)
             if label == "For sklad":
                 _prepare_sklad_export(app, wb, _lg)
                 _lg(
@@ -317,7 +355,11 @@ def run_auto1_pipeline(
                     "если дольше 5 мин — откройте Excel (AUTO1_EXCEL_VISIBLE=1) "
                     "или остановите прогон."
                 )
-            _invoke_sheet_click_macro(app, wb, sheet, macro, _lg)
+            _run_with_heartbeat(
+                label,
+                lambda m=macro: _invoke_sheet_click_macro(app, wb, sheet, m, _lg),
+                _lg,
+            )
             done.append(Auto1StepResult(label=label, macro=macro))
             _lg(f"Шаг «{label}» завершён ({time.monotonic() - step_t0:.1f} с).")
 
