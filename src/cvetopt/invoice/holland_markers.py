@@ -15,7 +15,7 @@ from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
 LogFn = Callable[[str], None]
 
-_HOLLAND_DATA_FIRST_ROW = 8  # offset_Y=7 в btnImport_Click (Auto_new)
+_HOLLAND_DATA_FIRST_ROW = 2  # в выгрузке Голландия_1_*: строка 1 — заголовки
 _MSO_AUTOMATION_SECURITY_LOW = 1
 _ZEBRA_EVEN = 12379351
 _ZEBRA_ODD = 9944773
@@ -311,14 +311,19 @@ def _break_external_links(wb_api: object) -> None:
             pass
 
 
-def _freeze_sheet_values(ws: object, *, app: object | None = None) -> None:
-    """Формулы btnExport2 (ссылки на Auto_new.xls) → значения до вставки колонок A–B."""
+def _freeze_sheet_values(ws: object, *, app: object | None = None, recalc: bool = True) -> None:
+    """Формулы btnExport2 (ссылки на Auto_new.xls) → значения до вставки колонок A–B.
+
+    recalc=False: НЕ пересчитывать и не обновлять ссылки — берём кэшированные
+    значения (Auto_new уже закрыт, пересчёт превратил бы Quant в #ССЫЛКА!/код ошибки).
+    """
     wb_api = ws.api.Parent
-    try:
-        wb_api.UpdateLink(Name=None, Type=_XL_EXCEL_LINKS)
-    except Exception:
-        pass
-    _calculate_workbook(app)
+    if recalc:
+        try:
+            wb_api.UpdateLink(Name=None, Type=_XL_EXCEL_LINKS)
+        except Exception:
+            pass
+        _calculate_workbook(app)
     _break_external_links(wb_api)
     used = ws.api.UsedRange
     if used is None:
@@ -583,7 +588,8 @@ def add_holland_row_markers(
 ) -> Path:
     """
     Добавляет слева два столбца с красной/зелёной кнопкой (как в Эквадор).
-    Сохраняет книгу как .xlsm с VBA; исходный .xlsx удаляется.
+    Сохраняет книгу как .xlsm с VBA; исходный .xlsx остаётся рядом
+    как «<имя>_исходный.xlsx» для сверки данных.
     """
     _lg = log or _default_log
     if sys.platform != "win32":
@@ -619,9 +625,15 @@ def add_holland_row_markers(
         app = xw.App(visible=False, add_book=False)
         app.display_alerts = False
         app.api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
-        wb = app.books.open(str(export_path), update_links=3)
+        # Ручной расчёт + без обновления ссылок: Auto_new уже закрыт,
+        # пересчёт превратил бы Quant в код ошибки (-2146826265).
+        try:
+            app.api.Calculation = -4135  # xlCalculationManual
+        except Exception:
+            pass
+        wb = app.books.open(str(export_path), update_links=0)
         ws = wb.sheets[0]
-        _freeze_sheet_values(ws, app=app)
+        _freeze_sheet_values(ws, app=app, recalc=False)
         removed = _delete_export_checkboxes(ws)
         _lg(
             f"Голландия: формулы → значения; удалено старых чекбоксов: {removed}"
@@ -695,10 +707,14 @@ def add_holland_row_markers(
             f"{_HOLLAND_DATA_FIRST_ROW}–{last_row} → {xlsm_path.name}"
         )
         if export_path.suffix.lower() == ".xlsx" and export_path.exists():
+            source_path = export_path.with_name(f"{export_path.stem}_исходный.xlsx")
             try:
-                export_path.unlink()
+                if source_path.exists():
+                    source_path.unlink()
+                export_path.rename(source_path)
+                _lg(f"Голландия: исходный файл сохранён → {source_path.name}")
             except OSError as e:
-                _lg(f"Голландия: не удалось удалить {export_path.name} — {e}")
+                _lg(f"Голландия: исходный файл оставлен как есть — {e}")
         return xlsm_path.resolve()
     finally:
         if wb is not None:
