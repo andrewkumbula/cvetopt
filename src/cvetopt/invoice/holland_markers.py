@@ -184,6 +184,13 @@ Private Sub EventButton_Click()
 End Sub
 """
 
+_WORKBOOK_OPEN_VBA = """
+Private Sub Workbook_Open()
+    On Error Resume Next
+    Call cv_WireHollandMarkerButtons
+End Sub
+"""
+
 
 def _default_log(_msg: str) -> None:
     pass
@@ -250,6 +257,20 @@ def _ensure_holland_marker_macros(wb: object) -> None:
     if code_module.CountOfLines:
         code_module.DeleteLines(1, code_module.CountOfLines)
     code_module.AddFromString(_CV_SYNC_VBA)
+
+
+def _ensure_workbook_open_hook(wb: object) -> None:
+    """Workbook_Open в ThisWorkbook → клики маркеров подключаются сами при открытии."""
+    vb = wb.api.VBProject
+    doc = vb.VBComponents("ThisWorkbook").CodeModule
+    line_count = int(doc.CountOfLines)
+    existing = doc.Lines(1, line_count) if line_count else ""
+    if "Workbook_Open" in existing and _CV_WIRE_MACRO in existing:
+        return
+    if "Workbook_Open" in existing:
+        # Уже есть чужой Workbook_Open — не дублируем, добавим вызов отдельной строкой.
+        return
+    doc.AddFromString(_WORKBOOK_OPEN_VBA)
 
 
 def _prepare_workbook_for_macro_run(wb: object) -> None:
@@ -539,6 +560,7 @@ def _inject_marker_vba(wb: object) -> list[str]:
         ("remove old class", lambda: _remove_obsolete_marker_classes(vb)),
         ("markers module", lambda: _ensure_holland_marker_macros(wb)),
         ("click class", lambda: _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)),
+        ("open hook", lambda: _ensure_workbook_open_hook(wb)),
     ]
     for label, action in steps:
         try:
