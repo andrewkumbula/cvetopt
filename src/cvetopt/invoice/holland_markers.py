@@ -28,6 +28,7 @@ _MARKER_CLASS = "cvHollandButtonHandler"
 _EDIT_BUTTON_NAME = "cbHollandEdit"
 _XL_CHECKBOX = 1
 _XL_EXCEL_LINKS = 1
+_XL_UP = -4162
 _HOLLAND_RESERVED_OLE = frozenset({_EDIT_BUTTON_NAME})
 
 _CV_SYNC_VBA = """
@@ -369,6 +370,100 @@ def _delete_export_checkboxes(sheet: object) -> int:
     return removed
 
 
+def _header_columns(ws: object) -> dict[str, int]:
+    api = ws.api
+    cols: dict[str, int] = {}
+    for col in range(1, 30):
+        try:
+            header = str(api.Cells(1, col).Value2 or "").strip().casefold()
+        except Exception:
+            continue
+        if header and header not in cols:
+            cols[header] = col
+    return cols
+
+
+def _ws_last_data_row(ws: object, key_col: int = 2) -> int:
+    api = ws.api
+    try:
+        return int(api.Cells(api.Rows.Count, key_col).End(_XL_UP).Row)
+    except Exception:
+        return 1
+
+
+def _is_excel_error_value(value: object) -> bool:
+    try:
+        return isinstance(value, (int, float)) and -2146826300 < float(value) < -2146826200
+    except Exception:
+        return False
+
+
+def _repair_quant_ref_formulas(ws: object, app: object, log: LogFn) -> None:
+    """btnExport2 копирует формулу цены со сломанным ключом (#REF!).
+
+    Возвращаем формулу VLOOKUP, подставляя ключ из самой выгрузки (Description
+    или Packing). Делать это нужно, пока Auto_new открыт — иначе [Auto_new.xls]
+    не резолвится.
+    """
+    api = ws.api
+    headers = _header_columns(ws)
+    quant_col = headers.get("quant")
+    if not quant_col:
+        return
+    try:
+        base_formula = str(api.Cells(2, quant_col).Formula)
+    except Exception:
+        return
+    if "#REF!" not in base_formula:
+        return
+
+    last_row = _ws_last_data_row(ws, key_col=headers.get("packing", 2))
+    if last_row < 2:
+        return
+
+    key_order = [
+        name for name in ("description", "packing", "box nr.") if name in headers
+    ]
+    if not key_order:
+        log("Голландия: Quant #REF! — нет колонок-ключей (Description/Packing).")
+        return
+
+    for key_name in key_order:
+        key_col = headers[key_name]
+        key_letter = _col_letter(key_col)
+        for row in range(2, last_row + 1):
+            try:
+                cell = api.Cells(row, quant_col)
+                formula = str(cell.Formula)
+                if "#REF!" not in formula:
+                    formula = base_formula
+                cell.Formula = formula.replace("#REF!", f"{key_letter}{row}", 1)
+            except Exception:
+                pass
+        _calculate_workbook(app)
+        try:
+            sample = api.Cells(2, quant_col).Value2
+        except Exception:
+            sample = None
+        if not _is_excel_error_value(sample):
+            log(
+                f"Голландия: Quant восстановлен по ключу «{key_name}» "
+                f"({key_letter}), пример C2={sample!r}."
+            )
+            return
+        log(f"Голландия: ключ «{key_name}» дал ошибку, пробую следующий…")
+
+    log("Голландия: Quant — ни один ключ не подошёл, останется #ССЫЛКА!.")
+
+
+def _col_letter(col: int) -> str:
+    letters = ""
+    while col > 0:
+        col, rem = divmod(col - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
 def _log_export_formulas(ws: object, log: LogFn) -> None:
     """Диагностика: что btnExport2 положил в строку заголовка и первую строку данных."""
     api = ws.api
@@ -413,6 +508,10 @@ def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) ->
         _log_export_formulas(ws, log)
     except Exception:
         pass
+    try:
+        _repair_quant_ref_formulas(ws, app, log)
+    except Exception as e:
+        log(f"Голландия: восстановление Quant пропущено — {e}")
     _freeze_sheet_values(ws, app=app)
     removed = _delete_export_checkboxes(ws)
     wb_holland.save()
