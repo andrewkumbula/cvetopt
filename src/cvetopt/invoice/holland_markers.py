@@ -30,15 +30,20 @@ _EDIT_BUTTON_NAME = "cbHollandEdit"
 _XL_CHECKBOX = 1
 _XL_EXCEL_LINKS = 1
 _XL_UP = -4162
+_XL_BUTTON_CONTROL = 0
 _HOLLAND_RESERVED_OLE = frozenset({_EDIT_BUTTON_NAME})
 
 _CV_SYNC_VBA = """
 Public ColHollandButtons As Collection
 
+Public Sub Auto_Open()
+    Call cv_WireHollandMarkerButtons
+End Sub
+
 Public Sub cv_WireHollandMarkerButtons()
     Dim aButton As OLEObject
     Dim h As cvHollandButtonHandler
-    On Error Resume Next
+    Application.EnableEvents = True
     Set ColHollandButtons = New Collection
     For Each aButton In ThisWorkbook.Worksheets(1).OLEObjects
         If aButton.Name = "cbHollandEdit" Then GoTo NextBtn
@@ -188,7 +193,14 @@ End Sub
 
 _WORKBOOK_OPEN_VBA = """
 Private Sub Workbook_Open()
-    On Error Resume Next
+    Application.EnableEvents = True
+    Call cv_WireHollandMarkerButtons
+End Sub
+"""
+
+_WORKSHEET_ACTIVATE_VBA = """
+Private Sub Worksheet_Activate()
+    Application.EnableEvents = True
     Call cv_WireHollandMarkerButtons
 End Sub
 """
@@ -253,6 +265,7 @@ def _ensure_holland_marker_macros(wb: object) -> None:
     if (
         f"Sub {_CV_SYNC_MACRO}" in existing
         and f"Sub {_CV_WIRE_MACRO}" in existing
+        and "Sub Auto_Open" in existing
         and "cvDelExportCheckboxes" in existing
     ):
         return
@@ -270,9 +283,21 @@ def _ensure_workbook_open_hook(wb: object) -> None:
     if "Workbook_Open" in existing and _CV_WIRE_MACRO in existing:
         return
     if "Workbook_Open" in existing:
-        # Уже есть чужой Workbook_Open — не дублируем, добавим вызов отдельной строкой.
+        # Чужой Workbook_Open — не трогаем; сработают Auto_Open и Worksheet_Activate.
         return
     doc.AddFromString(_WORKBOOK_OPEN_VBA)
+
+
+def _ensure_sheet_activate_hook(wb: object) -> None:
+    """Worksheet_Activate — запасной путь, если Workbook_Open не сработал."""
+    vb = wb.api.VBProject
+    codename = str(wb.sheets[0].api.CodeName)
+    doc = vb.VBComponents(codename).CodeModule
+    line_count = int(doc.CountOfLines)
+    existing = doc.Lines(1, line_count) if line_count else ""
+    if "Worksheet_Activate" in existing and _CV_WIRE_MACRO in existing:
+        return
+    doc.AddFromString(_WORKSHEET_ACTIVATE_VBA)
 
 
 def _prepare_workbook_for_macro_run(wb: object) -> None:
@@ -610,30 +635,33 @@ def _count_marker_buttons(sheet: object) -> int:
 
 
 def _add_holland_edit_button(sheet: object) -> None:
-    """Как «Редактировать» в Эквадоре — подключает быстрые WithEvents-клики."""
+    """Form Control «Редактировать» — OnAction работает (у ActiveX CommandButton — нет)."""
     api = sheet.api
-    oles = api.OLEObjects()
-    for i in range(int(oles.Count), 0, -1):
+    for i in range(int(api.OLEObjects().Count), 0, -1):
         try:
-            if str(oles.Item(i).Name) == _EDIT_BUTTON_NAME:
-                oles.Item(i).Delete()
+            if str(api.OLEObjects().Item(i).Name) == _EDIT_BUTTON_NAME:
+                api.OLEObjects().Item(i).Delete()
+        except Exception:
+            pass
+    shapes = api.Shapes
+    for i in range(int(shapes.Count), 0, -1):
+        try:
+            if str(shapes.Item(i).Name) == _EDIT_BUTTON_NAME:
+                shapes.Item(i).Delete()
         except Exception:
             pass
     anchor = api.Range("D1")
-    ole = oles.Add(
-        "Forms.CommandButton.1",
-        "",
-        False,
-        False,
-        float(anchor.Left),
-        float(anchor.Top),
-        130.0,
-        float(anchor.Height) * 1.4,
-    )
-    ole.Name = _EDIT_BUTTON_NAME
-    btn = ole.Object
-    btn.Caption = "Редактировать"
-    btn.OnAction = _CV_WIRE_MACRO
+    left = float(anchor.Left)
+    top = float(anchor.Top)
+    width = 130.0
+    height = max(float(anchor.Height) * 1.4, 18.0)
+    shp = shapes.AddFormControl(_XL_BUTTON_CONTROL, left, top, width, height)
+    shp.Name = _EDIT_BUTTON_NAME
+    shp.OnAction = f"{_MARKER_MODULE}.{_CV_WIRE_MACRO}"
+    try:
+        shp.TextFrame.Characters().Text = "Редактировать"
+    except Exception:
+        pass
 
 
 def _marker_columns_already(ws: object) -> bool:
@@ -704,6 +732,7 @@ def _inject_marker_vba(wb: object) -> list[str]:
         ("markers module", lambda: _ensure_holland_marker_macros(wb)),
         ("click class", lambda: _ensure_class_module(vb, _MARKER_CLASS, _MARKER_CLASS_VBA)),
         ("open hook", lambda: _ensure_workbook_open_hook(wb)),
+        ("activate hook", lambda: _ensure_sheet_activate_hook(wb)),
     ]
     for label, action in steps:
         try:
@@ -730,7 +759,10 @@ def _wire_holland_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
             return
         except Exception:
             continue
-    log("Голландия: нажмите «Редактировать» для подключения кликов.")
+    log(
+        "Голландия: клики не подключились — откройте файл с макросами "
+        "или нажмите «Редактировать»."
+    )
 
 
 def _sync_holland_markers_vba(
