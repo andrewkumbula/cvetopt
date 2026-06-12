@@ -369,6 +369,25 @@ def _delete_export_checkboxes(sheet: object) -> int:
     return removed
 
 
+def _log_export_formulas(ws: object, log: LogFn) -> None:
+    """Диагностика: что btnExport2 положил в строку заголовка и первую строку данных."""
+    api = ws.api
+    for row in (1, 2):
+        parts: list[str] = []
+        for col in range(1, 12):
+            try:
+                cell = api.Cells(row, col)
+                formula = str(cell.Formula)
+                value = cell.Value2
+            except Exception:
+                continue
+            if formula in ("", "None"):
+                continue
+            parts.append(f"{chr(64 + col)}{row}={formula!r}(={value!r})")
+        if parts:
+            log("Голландия диагностика: " + "; ".join(parts))
+
+
 def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) -> None:
     """Сразу после btnExport2: пересчёт пока Auto_new открыт → значения, без чекбоксов."""
     candidates = [
@@ -390,6 +409,10 @@ def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) ->
         wb_holland = app.books.open(str(export_path), update_links=3)
         opened_here = True
     ws = wb_holland.sheets[0]
+    try:
+        _log_export_formulas(ws, log)
+    except Exception:
+        pass
     _freeze_sheet_values(ws, app=app)
     removed = _delete_export_checkboxes(ws)
     wb_holland.save()
