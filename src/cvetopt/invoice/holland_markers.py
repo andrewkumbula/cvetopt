@@ -488,12 +488,23 @@ def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) ->
     candidates = [
         p
         for p in export_dir.glob("Голландия_1_*.xlsx")
-        if p.is_file()
+        if p.is_file() and not p.stem.casefold().endswith("_исходный")
     ]
     if not candidates:
         log("Голландия: файл экспорта не найден — постобработка пропущена")
         return
     export_path = max(candidates, key=lambda p: p.stat().st_mtime)
+
+    # Сырой файл btnExport2 (до наших правок) → _исходный для сверки данных.
+    source_copy = export_path.with_name(f"{export_path.stem}_исходный.xlsx")
+    try:
+        import shutil
+
+        shutil.copy2(export_path, source_copy)
+        log(f"Голландия: сырой файл сохранён (до доработок) → {source_copy.name}")
+    except Exception as e:
+        log(f"Голландия: не удалось сохранить сырой файл — {e}")
+
     wb_holland: object | None = None
     for book in app.books:
         if str(book.name).casefold() == export_path.name.casefold():
@@ -754,8 +765,8 @@ def add_holland_row_markers(
 ) -> Path:
     """
     Добавляет слева два столбца с красной/зелёной кнопкой (как в Эквадор).
-    Сохраняет книгу как .xlsm с VBA; исходный .xlsx остаётся рядом
-    как «<имя>_исходный.xlsx» для сверки данных.
+    Сохраняет книгу как .xlsm с VBA. Сырой файл btnExport2 (до правок)
+    сохраняется как «<имя>_исходный.xlsx» в fix_holland_export_after_auto1.
     """
     _lg = log or _default_log
     if sys.platform != "win32":
@@ -876,11 +887,15 @@ def add_holland_row_markers(
             source_path = export_path.with_name(f"{export_path.stem}_исходный.xlsx")
             try:
                 if source_path.exists():
-                    source_path.unlink()
-                export_path.rename(source_path)
-                _lg(f"Голландия: исходный файл сохранён → {source_path.name}")
+                    # Сырой _исходный уже сохранён в fix_holland_export_after_auto1 —
+                    # рабочий .xlsx больше не нужен (он стал .xlsm).
+                    export_path.unlink()
+                else:
+                    # Запасной путь (например, перевод без auto1): сохраняем рабочий.
+                    export_path.rename(source_path)
+                    _lg(f"Голландия: исходный файл сохранён → {source_path.name}")
             except OSError as e:
-                _lg(f"Голландия: исходный файл оставлен как есть — {e}")
+                _lg(f"Голландия: рабочий файл оставлен как есть — {e}")
         return xlsm_path.resolve()
     finally:
         if wb is not None:
