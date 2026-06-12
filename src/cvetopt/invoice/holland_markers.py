@@ -30,7 +30,6 @@ _EDIT_BUTTON_NAME = "cbHollandEdit"
 _XL_CHECKBOX = 1
 _XL_EXCEL_LINKS = 1
 _XL_UP = -4162
-_XL_BUTTON_CONTROL = 0
 _HOLLAND_RESERVED_OLE = frozenset({_EDIT_BUTTON_NAME})
 
 _CV_SYNC_VBA = """
@@ -634,8 +633,8 @@ def _count_marker_buttons(sheet: object) -> int:
     return count
 
 
-def _add_holland_edit_button(sheet: object) -> None:
-    """Form Control «Редактировать» — OnAction работает (у ActiveX CommandButton — нет)."""
+def _remove_holland_edit_button(sheet: object) -> None:
+    """Убрать устаревшую кнопку «Редактировать» (клики подключаются при открытии)."""
     api = sheet.api
     for i in range(int(api.OLEObjects().Count), 0, -1):
         try:
@@ -650,18 +649,6 @@ def _add_holland_edit_button(sheet: object) -> None:
                 shapes.Item(i).Delete()
         except Exception:
             pass
-    anchor = api.Range("D1")
-    left = float(anchor.Left)
-    top = float(anchor.Top)
-    width = 130.0
-    height = max(float(anchor.Height) * 1.4, 18.0)
-    shp = shapes.AddFormControl(_XL_BUTTON_CONTROL, left, top, width, height)
-    shp.Name = _EDIT_BUTTON_NAME
-    shp.OnAction = f"{_MARKER_MODULE}.{_CV_WIRE_MACRO}"
-    try:
-        shp.TextFrame.Characters().Text = "Редактировать"
-    except Exception:
-        pass
 
 
 def _marker_columns_already(ws: object) -> bool:
@@ -759,10 +746,7 @@ def _wire_holland_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
             return
         except Exception:
             continue
-    log(
-        "Голландия: клики не подключились — откройте файл с макросами "
-        "или нажмите «Редактировать»."
-    )
+    log("Голландия: клики не подключились — откройте файл с включёнными макросами.")
 
 
 def _sync_holland_markers_vba(
@@ -915,10 +899,10 @@ def add_holland_row_markers(
             )
 
         try:
-            _add_holland_edit_button(ws)
+            _remove_holland_edit_button(ws)
             _wire_holland_marker_clicks(app, wb, log=_lg)
         except Exception as e:
-            _lg(f"Голландия: кнопка «Редактировать» — {e}")
+            _lg(f"Голландия: подключение кликов — {e}")
 
         wb.save()
         _lg(
