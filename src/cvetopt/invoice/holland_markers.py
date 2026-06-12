@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -508,30 +507,10 @@ def _log_export_formulas(ws: object, log: LogFn) -> None:
             log("Голландия диагностика: " + "; ".join(parts))
 
 
-def save_holland_source_copy(export_path: Path, log: LogFn | None = None) -> Path | None:
-    """Копия выгрузки после починки Quant/заморозки, но до маркеров A–B."""
-    _lg = log or _default_log
-    export_path = export_path.resolve()
-    if not export_path.is_file() or export_path.suffix.lower() != ".xlsx":
-        return None
-    source_copy = export_path.with_name(f"{export_path.stem}_исходный.xlsx")
-    try:
-        if source_copy.exists():
-            source_copy.unlink()
-        shutil.copy2(export_path, source_copy)
-        _lg(f"Голландия: исходный (до кнопок) → {source_copy.name}")
-        return source_copy
-    except OSError as e:
-        _lg(f"Голландия: не удалось сохранить исходный — {e}")
-        return None
-
-
 def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) -> None:
     """Сразу после btnExport2: пересчёт пока Auto_new открыт → значения, без чекбоксов."""
     candidates = [
-        p
-        for p in export_dir.glob("Голландия_1_*.xlsx")
-        if p.is_file() and not p.stem.casefold().endswith("_исходный")
+        p for p in export_dir.glob("Голландия_1_*.xlsx") if p.is_file()
     ]
     if not candidates:
         log("Голландия: файл экспорта не найден — постобработка пропущена")
@@ -565,8 +544,6 @@ def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) ->
         f"Голландия: {export_path.name} — формулы → значения, "
         f"удалено чекбоксов: {removed}"
     )
-    save_holland_source_copy(export_path, log)
-
 
 def _missing_marker_assets(assets_dir: Path) -> list[str]:
     return [name for name in _CHECKBOX_BMPS if not (assets_dir / name).is_file()]
@@ -791,8 +768,7 @@ def add_holland_row_markers(
 ) -> Path:
     """
     Добавляет слева два столбца с красной/зелёной кнопкой (как в Эквадор).
-    Сохраняет книгу как .xlsm с VBA. «<имя>_исходный.xlsx» (после починки
-    Quant, без чекбоксов, до колонок A–B) создаётся в fix_holland_export_after_auto1.
+    Сохраняет книгу как .xlsm с VBA; исходный .xlsx удаляется.
     """
     _lg = log or _default_log
     if sys.platform != "win32":
@@ -910,18 +886,10 @@ def add_holland_row_markers(
             f"{_HOLLAND_DATA_FIRST_ROW}–{last_row} → {xlsm_path.name}"
         )
         if export_path.suffix.lower() == ".xlsx" and export_path.exists():
-            source_path = export_path.with_name(f"{export_path.stem}_исходный.xlsx")
             try:
-                if source_path.exists():
-                    export_path.unlink()
-                else:
-                    save_holland_source_copy(export_path, _lg)
-                    if source_path.exists():
-                        export_path.unlink()
-                    else:
-                        export_path.rename(source_path)
+                export_path.unlink()
             except OSError as e:
-                _lg(f"Голландия: рабочий файл оставлен как есть — {e}")
+                _lg(f"Голландия: не удалось удалить {export_path.name} — {e}")
         return xlsm_path.resolve()
     finally:
         if wb is not None:

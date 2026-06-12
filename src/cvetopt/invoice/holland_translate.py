@@ -36,20 +36,7 @@ def _next_col_letter(col: str) -> str:
     return "".join(reversed(out))
 
 
-SOURCE_COPY_SUFFIX = "_исходный"
-
-
-def is_holland_source_copy(p: Path) -> bool:
-    """Копия сырого файла btnExport2 (для сверки), не рабочая выгрузка."""
-    return p.stem.casefold().endswith(SOURCE_COPY_SUFFIX)
-
-
-def holland_export_candidates(
-    output_dir: Path,
-    on_date: date | None = None,
-    *,
-    include_source: bool = False,
-) -> list[Path]:
+def holland_export_candidates(output_dir: Path, on_date: date | None = None) -> list[Path]:
     if not output_dir.is_dir():
         return []
     names: list[str] = ["Голландия_1_*.xlsx", "Голландия_1_*.xlsm"]
@@ -61,12 +48,9 @@ def holland_export_candidates(
     for pattern in names:
         for p in output_dir.glob(pattern):
             rp = p.resolve()
-            if rp in seen or not rp.is_file():
-                continue
-            if not include_source and is_holland_source_copy(rp):
-                continue
-            seen.add(rp)
-            found.append(rp)
+            if rp not in seen and rp.is_file():
+                seen.add(rp)
+                found.append(rp)
     if found:
         return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
     found = sorted(
@@ -75,8 +59,6 @@ def holland_export_candidates(
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    if not include_source:
-        found = [p for p in found if not is_holland_source_copy(p)]
     return found
 
 
@@ -110,7 +92,7 @@ def archive_stale_holland_exports(
         raise ValueError("Папка архива не может совпадать с папкой Голландия.")
 
     candidates: list[Path] = []
-    for path in holland_export_candidates(sklad_dir, include_source=True):
+    for path in holland_export_candidates(sklad_dir):
         try:
             path.resolve().relative_to(archive_dir)
         except ValueError:
@@ -120,9 +102,7 @@ def archive_stale_holland_exports(
         return None, [], []
 
     keep = (keep_path or candidates[0]).resolve()
-    # Рядом с рабочим файлом оставляем его «_исходный» (для сверки данных).
-    keep_set = {keep, keep.with_name(f"{keep.stem}{SOURCE_COPY_SUFFIX}.xlsx").resolve()}
-    to_move = [path for path in candidates if path.resolve() not in keep_set]
+    to_move = [path for path in candidates if path.resolve() != keep]
     if not to_move:
         _lg("Голландия: старых файлов для архива нет")
         return None, [], []
