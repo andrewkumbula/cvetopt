@@ -67,11 +67,16 @@ def transform_biflorica_deals(path: Path) -> list[EcuadorDealRow]:
         qty_cols: dict[str, str] = {out_col: "" for _label, _src, out_col in _LENGTHS}
 
         if priced_labels and stems:
-            # Как в типичных строках шаблона: все стебли в колонку длины с ценой.
-            target_col = next(
-                out_col for label, _src, out_col in _LENGTHS if label == priced_labels[0]
-            )
-            qty_cols[target_col] = stems
+            out_col_by_label = {label: out_col for label, _src, out_col in _LENGTHS}
+            stem_parts = [p.strip() for p in stems.split("|")]
+            if len(priced_labels) > 1 and len(stem_parts) == len(priced_labels):
+                # «175|175» при СМ «60|70» → 175 в колонку 60, 175 в колонку 70.
+                for label, part in zip(priced_labels, stem_parts):
+                    if part:
+                        qty_cols[out_col_by_label[label]] = part
+            else:
+                # Одна длина (или не делится поровну) — всё в первую длину с ценой.
+                qty_cols[out_col_by_label[priced_labels[0]]] = stems
 
         deals.append(
             EcuadorDealRow(

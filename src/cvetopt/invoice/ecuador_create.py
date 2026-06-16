@@ -708,6 +708,15 @@ def create_ecuador_file_from_biflorica(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     _lg(f"Эквадор: сделок {len(deals)}, шаблон {template.name}")
+    for deal in deals:
+        if "|" in deal.total_stems or "|" in deal.sm:
+            dist = ", ".join(
+                f"{col}={val}" for col, val in deal.qty_by_length_col.items() if val
+            )
+            _lg(
+                f"Эквадор: {deal.variety!r} СМ={deal.sm!r} "
+                f"ВСЕГО={deal.total_stems!r} → {dist or 'пусто'}"
+            )
 
     import xlwings as xw
 
