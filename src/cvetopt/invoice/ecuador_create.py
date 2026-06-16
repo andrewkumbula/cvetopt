@@ -322,6 +322,17 @@ def _open_workbook_quiet(app: object, path: Path) -> object:
     return app.books[-1]
 
 
+def _clear_data_sheet_area(sheet: object) -> None:
+    """Содержимое и примечания шаблона («0» в углу ячейки) в зоне данных."""
+    addr = f"D{_DATA_FIRST_ROW}:AB{_CLEAR_LAST_ROW}"
+    rng = sheet.range(addr)
+    rng.clear_contents()
+    try:
+        rng.api.ClearComments()
+    except Exception:
+        pass
+
+
 def _write_deal_row(sheet: object, row: int, deal: EcuadorDealRow) -> None:
     sheet.range((row, 4)).value = deal.plantation
     sheet.range((row, 5)).value = deal.flower_type
@@ -750,7 +761,7 @@ def create_ecuador_file_from_biflorica(
         path_sheet.range("A2").value = "False"
 
         _lg("Эквадор: заполняю строки…")
-        data_sheet.range(f"D{_DATA_FIRST_ROW}:AB{_CLEAR_LAST_ROW}").clear_contents()
+        _clear_data_sheet_area(data_sheet)
         last_row = _DATA_FIRST_ROW + len(deals) - 1
         for idx, deal in enumerate(deals):
             _write_deal_row(data_sheet, _DATA_FIRST_ROW + idx, deal)
