@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -24,8 +23,13 @@ _HOLLAND_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "kolli": ("kolli",),
     "s1": ("s1",),
     "s2": ("s2",),
+    "cnt": ("cnt",),
+    "price": ("price",),
 }
 _FORMULA_COLUMNS_FROM_AUTO1 = ("quant", "s1")
+_QUANT_VALUE_SOURCES = ("quant", "cnt", "kolli")
+_S1_VALUE_SOURCES = ("s1", "price")
+_TMP_VLOOKUP_RANGE = "[Auto_new.xls]tmp!$A$1:$H$500"
 _HOLLAND_DATA_FIRST_ROW = 2  # в выгрузке Голландия_1_*: строка 1 — заголовки
 _MSO_AUTOMATION_SECURITY_LOW = 1
 _ZEBRA_EVEN = 12379351
@@ -535,41 +539,47 @@ def _auto1_holland_row_pairs(
     return hol_cols, auto_cols, hol_first, auto_first, n_rows
 
 
-def _retarget_formula_from_auto1(
-    formula: str,
+def _cell_value_ok(value: object) -> bool:
+    if value is None or value == "":
+        return False
+    return not _is_excel_error_value(value)
+
+
+def _try_tmp_vlookup(
+    ws: object,
     *,
-    auto_row: int,
-    hol_row: int,
-    auto_cols: dict[str, int],
-    hol_cols: dict[str, int],
-) -> str:
-    if not formula.startswith("="):
-        return formula
-    result = formula
-    shared = set(auto_cols) & set(hol_cols)
-    for header in shared:
-        a_let = _col_letter(auto_cols[header])
-        h_let = _col_letter(hol_cols[header])
-        result = re.sub(
-            rf"\$?{a_let}\$?{auto_row}\b",
-            f"{h_let}{hol_row}",
-            result,
-            flags=re.IGNORECASE,
-        )
-    return result
+    row: int,
+    result_col: int,
+    key_col: int,
+    tmp_col_index: int,
+    app: object,
+) -> bool:
+    formula = (
+        f"=VLOOKUP({_col_letter(key_col)}{row},"
+        f"{_TMP_VLOOKUP_RANGE},{tmp_col_index},0)"
+    )
+    try:
+        ws.api.Cells(row, result_col).Formula = formula
+    except Exception:
+        return False
+    _recalculate_holland_workbook(ws, app)
+    try:
+        return _cell_value_ok(ws.api.Cells(row, result_col).Value2)
+    except Exception:
+        return False
 
 
-def _retarget_quant_s1_from_auto1(
+def _fill_quant_s1_from_auto1(
     app: object,
     wb_holland: object,
     log: LogFn,
     *,
     auto1_sheet_name: str = "auto1",
 ) -> bool:
-    """btnExport2 копирует ВПР с #ССЫЛКА! — берём формулы с листа auto1 и переназначаем колонки."""
+    """Значения Quant/S1 с auto1 (не формулы). Формулы btnExport2 с #ССЫЛКА! не трогаем."""
     ws_auto = _find_auto1_sheet(app, auto1_sheet_name)
     if ws_auto is None:
-        log("Голландия: лист auto1 не найден — переназначение Quant/S1 пропущено")
+        log("Голландия: лист auto1 не найден — Quant/S1 пропущены")
         return False
 
     ws_hol = wb_holland.sheets[0]
@@ -579,70 +589,13 @@ def _retarget_quant_s1_from_auto1(
         return False
     hol_cols, auto_cols, hol_first, auto_first, n_rows = mapping
 
-    hol_api = ws_hol.api
-    auto_api = ws_auto.api
-    retargeted = 0
-    for col_name in _FORMULA_COLUMNS_FROM_AUTO1:
-        if col_name not in hol_cols or col_name not in auto_cols:
-            continue
-        hc = hol_cols[col_name]
-        ac = auto_cols[col_name]
-        for i in range(n_rows):
-            hol_row = hol_first + i
-            auto_row = auto_first + i
-            try:
-                src = str(auto_api.Cells(auto_row, ac).Formula)
-            except Exception:
-                continue
-            if not src.startswith("="):
-                try:
-                    hol_api.Cells(hol_row, hc).Value = auto_api.Cells(auto_row, ac).Value2
-                    retargeted += 1
-                except Exception:
-                    pass
-                continue
-            try:
-                hol_api.Cells(hol_row, hc).Formula = _retarget_formula_from_auto1(
-                    src,
-                    auto_row=auto_row,
-                    hol_row=hol_row,
-                    auto_cols=auto_cols,
-                    hol_cols=hol_cols,
-                )
-                retargeted += 1
-            except Exception:
-                pass
-
-    if retargeted:
-        log(f"Голландия: Quant/S1 с auto1 ({n_rows} строк, ячеек: {retargeted})")
-        return True
-    log("Голландия: не удалось переназначить Quant/S1 с auto1")
-    return False
-
-
-def _copy_quant_s1_values_from_auto1(
-    app: object,
-    wb_holland: object,
-    log: LogFn,
-    *,
-    auto1_sheet_name: str = "auto1",
-) -> bool:
-    ws_auto = _find_auto1_sheet(app, auto1_sheet_name)
-    if ws_auto is None:
-        return False
-    ws_hol = wb_holland.sheets[0]
-    mapping = _auto1_holland_row_pairs(ws_hol, ws_auto)
-    if mapping is None:
-        return False
-    hol_cols, auto_cols, hol_first, auto_first, n_rows = mapping
-
     _ensure_auto1_calculated(app, ws_auto)
 
     hol_api = ws_hol.api
     auto_api = ws_auto.api
     auto_hdr_row = auto_first - 1
     samples: list[str] = []
-    for col_name in _FORMULA_COLUMNS_FROM_AUTO1:
+    for col_name in ("quant", "s1", "price", "cnt"):
         ac = auto_cols.get(col_name)
         if ac:
             try:
@@ -656,43 +609,103 @@ def _copy_quant_s1_values_from_auto1(
             f"данные {auto_first}…, {n_rows} строк; " + ", ".join(samples)
         )
 
-    copied = 0
-    for col_name in _FORMULA_COLUMNS_FROM_AUTO1:
-        if col_name not in hol_cols or col_name not in auto_cols:
-            continue
-        hc = hol_cols[col_name]
-        ac = auto_cols[col_name]
-        for i in range(n_rows):
-            try:
-                src = auto_api.Cells(auto_first + i, ac).Value2
-                if _is_excel_error_value(src):
+    hc_q = hol_cols.get("quant")
+    hc_s = hol_cols.get("s1")
+    quant_filled = 0
+    s1_filled = 0
+
+    for i in range(n_rows):
+        hol_row = hol_first + i
+        auto_row = auto_first + i
+        if hc_q:
+            for src in _QUANT_VALUE_SOURCES:
+                ac = auto_cols.get(src)
+                if not ac:
                     continue
-                hol_api.Cells(hol_first + i, hc).Value = src
-                copied += 1
+                try:
+                    v = auto_api.Cells(auto_row, ac).Value2
+                except Exception:
+                    continue
+                if _cell_value_ok(v):
+                    hol_api.Cells(hol_row, hc_q).Value = v
+                    quant_filled += 1
+                    break
+        if hc_s:
+            for src in _S1_VALUE_SOURCES:
+                ac = auto_cols.get(src)
+                if not ac:
+                    continue
+                try:
+                    v = auto_api.Cells(auto_row, ac).Value2
+                except Exception:
+                    continue
+                if _cell_value_ok(v):
+                    hol_api.Cells(hol_row, hc_s).Value = v
+                    s1_filled += 1
+                    break
+
+    vlookup_q = 0
+    if hc_q:
+        key_cols = [
+            hol_cols.get("description"),
+            hol_cols.get("packing"),
+            hol_cols.get("kolli"),
+        ]
+        for i in range(n_rows):
+            hol_row = hol_first + i
+            try:
+                cur = hol_api.Cells(hol_row, hc_q).Value2
             except Exception:
-                pass
-    if copied:
-        log(f"Голландия: значения Quant/S1 скопированы с auto1 ({copied} ячеек)")
-    else:
-        log("Голландия: с auto1 не скопировано ни одного значения Quant/S1")
-    return copied > 0
+                cur = None
+            if _cell_value_ok(cur):
+                continue
+            for key_col in key_cols:
+                if not key_col:
+                    continue
+                for tmp_idx in (2, 3, 4, 5, 6, 7):
+                    if _try_tmp_vlookup(
+                        ws_hol,
+                        row=hol_row,
+                        result_col=hc_q,
+                        key_col=key_col,
+                        tmp_col_index=tmp_idx,
+                        app=app,
+                    ):
+                        vlookup_q += 1
+                        break
+                else:
+                    continue
+                break
 
+    vlookup_s = 0
+    if hc_s:
+        desc_col = hol_cols.get("description")
+        if desc_col:
+            for i in range(n_rows):
+                hol_row = hol_first + i
+                try:
+                    cur = hol_api.Cells(hol_row, hc_s).Value2
+                except Exception:
+                    cur = None
+                if _cell_value_ok(cur):
+                    continue
+                if _try_tmp_vlookup(
+                    ws_hol,
+                    row=hol_row,
+                    result_col=hc_s,
+                    key_col=desc_col,
+                    tmp_col_index=8,
+                    app=app,
+                ):
+                    vlookup_s += 1
 
-def _column_error_rows(ws: object, header_name: str) -> int:
-    headers = _header_columns(ws)
-    col = headers.get(header_name)
-    if not col:
-        return 0
-    last_row = _holland_data_last_row(ws)
-    api = ws.api
-    err_rows = 0
-    for row in range(_HOLLAND_DATA_FIRST_ROW, last_row + 1):
-        try:
-            if _is_excel_error_value(api.Cells(row, col).Value2):
-                err_rows += 1
-        except Exception:
-            pass
-    return err_rows
+    log(
+        f"Голландия: Quant/S1 с auto1 — quant {quant_filled}/{n_rows}, "
+        f"s1 {s1_filled}/{n_rows}"
+        + (f", ВПР quant {vlookup_q}" if vlookup_q else "")
+        + (f", ВПР s1 {vlookup_s}" if vlookup_s else "")
+    )
+    return quant_filled > 0 or s1_filled > 0 or vlookup_q > 0 or vlookup_s > 0
 
 
 def _ws_last_data_row(ws: object, key_col: int = 2) -> int:
@@ -942,33 +955,20 @@ def finalize_holland_after_auto1(
         pass
 
     try:
-        _copy_quant_s1_values_from_auto1(
+        _fill_quant_s1_from_auto1(
             app,
             wb_holland,
             log,
             auto1_sheet_name=auto1_sheet_name,
         )
     except Exception as e:
-        log(f"Голландия: копия Quant/S1 с auto1 — {e}")
+        log(f"Голландия: Quant/S1 с auto1 — {e}")
 
     _recalculate_holland_workbook(ws, app)
     try:
-        _log_data_column_errors(ws, log, stage="после копии с auto1")
+        _log_data_column_errors(ws, log, stage="после Quant/S1 с auto1")
     except Exception:
         pass
-
-    if _column_error_rows(ws, "quant") or _column_error_rows(ws, "s1"):
-        try:
-            _retarget_quant_s1_from_auto1(
-                app,
-                wb_holland,
-                log,
-                auto1_sheet_name=auto1_sheet_name,
-            )
-            _recalculate_holland_workbook(ws, app)
-            _log_data_column_errors(ws, log, stage="после формул с auto1")
-        except Exception as e:
-            log(f"Голландия: переназначение Quant/S1 — {e}")
 
     _freeze_sheet_values(ws, app=app, recalc=False)
     try:
