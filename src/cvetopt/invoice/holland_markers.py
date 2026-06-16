@@ -422,62 +422,110 @@ def _is_excel_error_value(value: object) -> bool:
         return False
 
 
-def _repair_quant_ref_formulas(ws: object, app: object, log: LogFn) -> None:
-    """btnExport2 копирует формулу цены со сломанным ключом (#REF!).
+_BROKEN_REF_TOKENS = ("#REF!", "#ССЫЛКА!")
+_LOOKUP_KEY_ORDER = ("s2", "description", "packing", "kolli", "box nr.")
 
-    Возвращаем формулу VLOOKUP, подставляя ключ из самой выгрузки (Description
-    или Packing). Делать это нужно, пока Auto_new открыт — иначе [Auto_new.xls]
-    не резолвится.
+
+def _formula_has_broken_ref(formula: str) -> bool:
+    upper = formula.upper()
+    return any(tok in upper for tok in _BROKEN_REF_TOKENS)
+
+
+def _replace_broken_ref(formula: str, cell_ref: str) -> str:
+    for tok in _BROKEN_REF_TOKENS:
+        if tok in formula:
+            return formula.replace(tok, cell_ref, 1)
+    folded = formula.casefold()
+    for tok in _BROKEN_REF_TOKENS:
+        idx = folded.find(tok.casefold())
+        if idx >= 0:
+            return formula[:idx] + cell_ref + formula[idx + len(tok) :]
+    return formula
+
+
+def _repair_export_ref_formulas(ws: object, app: object, log: LogFn) -> None:
+    """btnExport2 копирует формулы со сломанным ключом (#REF!/ #ССЫЛКА!).
+
+    Чиним все такие колонки (Quant, S1, …), подставляя ключ из выгрузки.
+  Порядок: S2 → Description → Packing (пока Auto_new открыт).
     """
     api = ws.api
     headers = _header_columns(ws)
-    quant_col = headers.get("quant")
-    if not quant_col:
+    if not headers:
         return
-    try:
-        base_formula = str(api.Cells(2, quant_col).Formula)
-    except Exception:
+    key_candidates = [name for name in _LOOKUP_KEY_ORDER if name in headers]
+    if not key_candidates:
+        log("Голландия: нет колонок-ключей для восстановления формул.")
         return
-    if "#REF!" not in base_formula:
-        return
-
-    last_row = _ws_last_data_row(ws, key_col=headers.get("packing", 2))
+    anchor_col = headers.get("packing") or headers.get("s2") or next(iter(headers.values()))
+    last_row = _ws_last_data_row(ws, key_col=anchor_col)
     if last_row < 2:
         return
 
-    key_order = [
-        name for name in ("description", "packing", "box nr.") if name in headers
-    ]
-    if not key_order:
-        log("Голландия: Quant #REF! — нет колонок-ключей (Description/Packing).")
-        return
+    repaired_any = False
+    for header, col in sorted(headers.items(), key=lambda x: x[1]):
+        try:
+            probe = str(api.Cells(2, col).Formula)
+        except Exception:
+            continue
+        if not probe.startswith("=") or not _formula_has_broken_ref(probe):
+            continue
 
-    for key_name in key_order:
-        key_col = headers[key_name]
-        key_letter = _col_letter(key_col)
+        col_fixed = False
+        for key_name in key_candidates:
+            if headers.get(key_name) == col:
+                continue
+            key_letter = _col_letter(headers[key_name])
+            for row in range(2, last_row + 1):
+                try:
+                    cell = api.Cells(row, col)
+                    formula = str(cell.Formula)
+                    if not formula.startswith("="):
+                        continue
+                    if not _formula_has_broken_ref(formula):
+                        formula = probe
+                    cell.Formula = _replace_broken_ref(formula, f"{key_letter}{row}")
+                except Exception:
+                    pass
+            _calculate_workbook(app)
+            try:
+                sample = api.Cells(2, col).Value2
+            except Exception:
+                sample = None
+            if not _is_excel_error_value(sample):
+                log(
+                    f"Голландия: «{header}» восстановлена по ключу «{key_name}» "
+                    f"({key_letter}), пример={sample!r}."
+                )
+                col_fixed = True
+                repaired_any = True
+                break
+            log(f"Голландия: «{header}» — ключ «{key_name}» не подошёл, пробую следующий…")
+        if not col_fixed:
+            log(f"Голландия: «{header}» — не удалось восстановить (#ССЫЛКА!/ #ЗНАЧ!).")
+
+    if not repaired_any:
+        log("Голландия: колонок с #ССЫЛКА! в формулах не найдено.")
+
+
+def _log_frozen_column_errors(ws: object, log: LogFn) -> None:
+    headers = _header_columns(ws)
+    anchor = headers.get("packing") or headers.get("s2") or 2
+    last_row = _ws_last_data_row(ws, key_col=anchor)
+    api = ws.api
+    for name in ("quant", "s1", "s2", "description", "kolli"):
+        col = headers.get(name)
+        if not col:
+            continue
+        err_rows = 0
         for row in range(2, last_row + 1):
             try:
-                cell = api.Cells(row, quant_col)
-                formula = str(cell.Formula)
-                if "#REF!" not in formula:
-                    formula = base_formula
-                cell.Formula = formula.replace("#REF!", f"{key_letter}{row}", 1)
+                if _is_excel_error_value(api.Cells(row, col).Value2):
+                    err_rows += 1
             except Exception:
                 pass
-        _calculate_workbook(app)
-        try:
-            sample = api.Cells(2, quant_col).Value2
-        except Exception:
-            sample = None
-        if not _is_excel_error_value(sample):
-            log(
-                f"Голландия: Quant восстановлен по ключу «{key_name}» "
-                f"({key_letter}), пример C2={sample!r}."
-            )
-            return
-        log(f"Голландия: ключ «{key_name}» дал ошибку, пробую следующий…")
-
-    log("Голландия: Quant — ни один ключ не подошёл, останется #ССЫЛКА!.")
+        if err_rows:
+            log(f"Голландия: в «{name}» после заморозки кодов ошибки: {err_rows} строк.")
 
 
 def _col_letter(col: int) -> str:
@@ -493,7 +541,7 @@ def _log_export_formulas(ws: object, log: LogFn) -> None:
     api = ws.api
     for row in (1, 2):
         parts: list[str] = []
-        for col in range(1, 12):
+        for col in range(1, 16):
             try:
                 cell = api.Cells(row, col)
                 formula = str(cell.Formula)
@@ -502,7 +550,7 @@ def _log_export_formulas(ws: object, log: LogFn) -> None:
                 continue
             if formula in ("", "None"):
                 continue
-            parts.append(f"{chr(64 + col)}{row}={formula!r}(={value!r})")
+            parts.append(f"{_col_letter(col)}{row}={formula!r}(={value!r})")
         if parts:
             log("Голландия диагностика: " + "; ".join(parts))
 
@@ -532,10 +580,14 @@ def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) ->
     except Exception:
         pass
     try:
-        _repair_quant_ref_formulas(ws, app, log)
+        _repair_export_ref_formulas(ws, app, log)
     except Exception as e:
-        log(f"Голландия: восстановление Quant пропущено — {e}")
+        log(f"Голландия: восстановление формул пропущено — {e}")
     _freeze_sheet_values(ws, app=app)
+    try:
+        _log_frozen_column_errors(ws, log)
+    except Exception:
+        pass
     removed = _delete_export_checkboxes(ws)
     wb_holland.save()
     if opened_here:
