@@ -446,6 +446,45 @@ def _find_box_header_row(ws_api: object, *, max_row: int = 15) -> int:
     return 1
 
 
+def _find_auto1_header_row(ws_api: object, *, max_row: int = 15) -> int:
+    """Строка заголовков на auto1: «Box…» в колонке A (обычно 7, не служебная строка 1)."""
+    found = 0
+    for row in range(5, max_row + 1):
+        try:
+            if _normalize_header(ws_api.Cells(row, 1).Value2).startswith("box"):
+                found = row
+        except Exception:
+            pass
+    if found:
+        return found
+    return _find_box_header_row(ws_api, max_row=max_row)
+
+
+def _holland_data_last_row(ws: object) -> int:
+    """Последняя строка данных: по колонкам с содержимым (не Packing/S2 — часто пустые)."""
+    headers = _holland_export_headers(ws)
+    scan_cols = [
+        headers.get("description"),
+        headers.get("kolli"),
+        headers.get("box nr."),
+        headers.get("quant"),
+        headers.get("s1"),
+    ]
+    last = _HOLLAND_DATA_FIRST_ROW - 1
+    for col in scan_cols:
+        if col:
+            last = max(last, _ws_last_data_row(ws, key_col=col))
+    return max(last, _HOLLAND_DATA_FIRST_ROW)
+
+
+def _ensure_auto1_calculated(app: object, ws_auto: object) -> None:
+    try:
+        ws_auto.api.Calculate()
+    except Exception:
+        pass
+    _calculate_workbook(app)
+
+
 def _find_auto1_sheet(app: object, sheet_name: str) -> object | None:
     for book in app.books:
         try:
@@ -474,7 +513,7 @@ def _auto1_holland_row_pairs(
 ) -> tuple[dict[str, int], dict[str, int], int, int, int] | None:
     hol_cols = _holland_export_headers(ws_hol)
     auto_api = ws_auto.api
-    auto_hdr_row = _find_box_header_row(auto_api, max_row=15)
+    auto_hdr_row = _find_auto1_header_row(auto_api, max_row=15)
     auto_cols = _header_columns_canonical(auto_api, auto_hdr_row)
     if not hol_cols or not auto_cols:
         return None
@@ -485,14 +524,8 @@ def _auto1_holland_row_pairs(
 
     hol_first = _HOLLAND_DATA_FIRST_ROW
     auto_first = auto_hdr_row + 1
-    anchor_hol = hol_cols.get("packing") or hol_cols.get("description") or hol_cols.get("s2") or 3
-    hol_last = _ws_last_data_row(ws_hol, key_col=anchor_hol)
-    anchor_auto = (
-        auto_cols.get("description")
-        or auto_cols.get("packing")
-        or auto_cols.get("s2")
-        or 6
-    )
+    hol_last = _holland_data_last_row(ws_hol)
+    anchor_auto = auto_cols.get("description") or 6
     auto_last = int(
         auto_api.Cells(auto_api.Rows.Count, anchor_auto).End(_XL_UP).Row
     )
@@ -603,8 +636,26 @@ def _copy_quant_s1_values_from_auto1(
         return False
     hol_cols, auto_cols, hol_first, auto_first, n_rows = mapping
 
+    _ensure_auto1_calculated(app, ws_auto)
+
     hol_api = ws_hol.api
     auto_api = ws_auto.api
+    auto_hdr_row = auto_first - 1
+    samples: list[str] = []
+    for col_name in _FORMULA_COLUMNS_FROM_AUTO1:
+        ac = auto_cols.get(col_name)
+        if ac:
+            try:
+                v = auto_api.Cells(auto_first, ac).Value2
+                samples.append(f"{col_name}={_col_letter(ac)}{auto_first}→{v!r}")
+            except Exception:
+                pass
+    if samples:
+        log(
+            f"Голландия: auto1 заголовок строка {auto_hdr_row}, "
+            f"данные {auto_first}…, {n_rows} строк; " + ", ".join(samples)
+        )
+
     copied = 0
     for col_name in _FORMULA_COLUMNS_FROM_AUTO1:
         if col_name not in hol_cols or col_name not in auto_cols:
@@ -613,14 +664,17 @@ def _copy_quant_s1_values_from_auto1(
         ac = auto_cols[col_name]
         for i in range(n_rows):
             try:
-                hol_api.Cells(hol_first + i, hc).Value = auto_api.Cells(
-                    auto_first + i, ac
-                ).Value2
+                src = auto_api.Cells(auto_first + i, ac).Value2
+                if _is_excel_error_value(src):
+                    continue
+                hol_api.Cells(hol_first + i, hc).Value = src
                 copied += 1
             except Exception:
                 pass
     if copied:
         log(f"Голландия: значения Quant/S1 скопированы с auto1 ({copied} ячеек)")
+    else:
+        log("Голландия: с auto1 не скопировано ни одного значения Quant/S1")
     return copied > 0
 
 
@@ -629,7 +683,7 @@ def _column_error_rows(ws: object, header_name: str) -> int:
     col = headers.get(header_name)
     if not col:
         return 0
-    last_row = _ws_last_data_row(ws, key_col=col)
+    last_row = _holland_data_last_row(ws)
     api = ws.api
     err_rows = 0
     for row in range(_HOLLAND_DATA_FIRST_ROW, last_row + 1):
@@ -658,8 +712,7 @@ def _is_excel_error_value(value: object) -> bool:
 
 def _log_data_column_errors(ws: object, log: LogFn, *, stage: str) -> None:
     headers = _header_columns(ws)
-    anchor = headers.get("packing") or headers.get("s2") or 3
-    last_row = _ws_last_data_row(ws, key_col=anchor)
+    last_row = _holland_data_last_row(ws)
     api = ws.api
     for name in ("quant", "s1", "s2", "description", "kolli"):
         col = headers.get(name)
@@ -768,9 +821,7 @@ def _insert_marker_columns(ws: object, log: LogFn) -> bool:
 
 
 def _holland_last_data_row(ws: object) -> int:
-    headers = _header_columns(ws)
-    anchor = headers.get("packing") or headers.get("s2") or 3
-    return max(_HOLLAND_DATA_FIRST_ROW, _ws_last_data_row(ws, key_col=anchor))
+    return _holland_data_last_row(ws)
 
 
 def _apply_holland_markers_to_workbook(
@@ -891,33 +942,33 @@ def finalize_holland_after_auto1(
         pass
 
     try:
-        _retarget_quant_s1_from_auto1(
+        _copy_quant_s1_values_from_auto1(
             app,
             wb_holland,
             log,
             auto1_sheet_name=auto1_sheet_name,
         )
     except Exception as e:
-        log(f"Голландия: переназначение Quant/S1 — {e}")
+        log(f"Голландия: копия Quant/S1 с auto1 — {e}")
 
     _recalculate_holland_workbook(ws, app)
     try:
-        _log_data_column_errors(ws, log, stage="после пересчёта")
+        _log_data_column_errors(ws, log, stage="после копии с auto1")
     except Exception:
         pass
 
     if _column_error_rows(ws, "quant") or _column_error_rows(ws, "s1"):
         try:
-            _copy_quant_s1_values_from_auto1(
+            _retarget_quant_s1_from_auto1(
                 app,
                 wb_holland,
                 log,
                 auto1_sheet_name=auto1_sheet_name,
             )
             _recalculate_holland_workbook(ws, app)
-            _log_data_column_errors(ws, log, stage="после копии с auto1")
+            _log_data_column_errors(ws, log, stage="после формул с auto1")
         except Exception as e:
-            log(f"Голландия: копия Quant/S1 с auto1 — {e}")
+            log(f"Голландия: переназначение Quant/S1 — {e}")
 
     _freeze_sheet_values(ws, app=app, recalc=False)
     try:
@@ -926,6 +977,7 @@ def finalize_holland_after_auto1(
         pass
 
     last_row = _holland_last_data_row(ws)
+    log(f"Голландия: строк данных для маркеров: {_HOLLAND_DATA_FIRST_ROW}–{last_row}")
     if last_row < _HOLLAND_DATA_FIRST_ROW:
         log("Голландия: маркеры пропущены — нет строк данных.")
         wb_holland.save()
