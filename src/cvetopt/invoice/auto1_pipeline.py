@@ -331,6 +331,8 @@ def run_auto1_pipeline(
     cfg: Auto1PipelineConfig,
     *,
     sklad_export_dir: Path | None = None,
+    holland_marker_assets_dir: Path | None = None,
+    add_holland_row_markers: bool = False,
     log: LogFn | None = None,
 ) -> list[Auto1StepResult]:
     """
@@ -424,15 +426,24 @@ def run_auto1_pipeline(
             )
             _lg(f"Шаг «{label}» завершён ({time.monotonic() - step_t0:.1f} с).")
             if label == "For sklad":
-                from cvetopt.invoice.holland_markers import fix_holland_export_after_auto1
+                if add_holland_row_markers and holland_marker_assets_dir is not None:
+                    from cvetopt.invoice.holland_markers import finalize_holland_after_auto1
 
-                fix_holland_export_after_auto1(app, export_dir, _lg)
+                    marked = finalize_holland_after_auto1(
+                        app,
+                        export_dir,
+                        holland_marker_assets_dir,
+                        _lg,
+                        auto1_sheet_name=cfg.sheet_name,
+                    )
+                    if marked is not None:
+                        _lg(f"Голландия: готово → {marked.name}")
 
         wb.save()
         _lg(f"Книга сохранена: {path.name}")
         _lg(
-            "Выгрузка для склада: C:\\Инвойсы склад\\Голландия_1_<дата>.xlsx "
-            "(и копия в C:\\Invoice\\1\\copy\\ — см. макрос btnExport2)."
+            "Выгрузка для склада: C:\\Инвойсы склад\\Голландия_1_<дата>.xlsm "
+            "(макрос btnExport2 + маркеры A–B при включённой опции)."
         )
         return done
     finally:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -15,6 +16,16 @@ from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
 LogFn = Callable[[str], None]
 
+_HOLLAND_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "box nr.": ("box nr.", "box nr", "box"),
+    "packing": ("packing",),
+    "quant": ("quant",),
+    "description": ("description",),
+    "kolli": ("kolli",),
+    "s1": ("s1",),
+    "s2": ("s2",),
+}
+_FORMULA_COLUMNS_FROM_AUTO1 = ("quant", "s1")
 _HOLLAND_DATA_FIRST_ROW = 2  # в выгрузке Голландия_1_*: строка 1 — заголовки
 _MSO_AUTOMATION_SECURITY_LOW = 1
 _ZEBRA_EVEN = 12379351
@@ -358,11 +369,7 @@ def _break_external_links(wb_api: object) -> None:
 
 
 def _freeze_sheet_values(ws: object, *, app: object | None = None, recalc: bool = True) -> None:
-    """Формулы btnExport2 (ссылки на Auto_new.xls) → значения до вставки колонок A–B.
-
-    recalc=False: НЕ пересчитывать и не обновлять ссылки — берём кэшированные
-    значения (Auto_new уже закрыт, пересчёт превратил бы Quant в #ССЫЛКА!/код ошибки).
-    """
+    """Формулы со ссылками на Auto_new.xls → значения; затем BreakLink."""
     wb_api = ws.api.Parent
     if recalc:
         try:
@@ -407,6 +414,233 @@ def _header_columns(ws: object) -> dict[str, int]:
     return cols
 
 
+def _normalize_header(text: object) -> str:
+    return str(text or "").strip().casefold()
+
+
+def _header_columns_canonical(ws_api: object, header_row: int) -> dict[str, int]:
+    cols: dict[str, int] = {}
+    for col in range(1, 60):
+        try:
+            h = _normalize_header(ws_api.Cells(header_row, col).Value2)
+        except Exception:
+            continue
+        if not h:
+            continue
+        for canonical, aliases in _HOLLAND_COLUMN_ALIASES.items():
+            if canonical in cols:
+                continue
+            if h == canonical or h in aliases:
+                cols[canonical] = col
+    return cols
+
+
+def _find_box_header_row(ws_api: object, *, max_row: int = 15) -> int:
+    for row in range(1, max_row + 1):
+        for col in range(1, 25):
+            try:
+                if _normalize_header(ws_api.Cells(row, col).Value2).startswith("box"):
+                    return row
+            except Exception:
+                pass
+    return 1
+
+
+def _find_auto1_sheet(app: object, sheet_name: str) -> object | None:
+    for book in app.books:
+        try:
+            book_name = str(book.name).casefold()
+            full_name = str(getattr(book, "fullname", "") or "").casefold()
+        except Exception:
+            continue
+        if "auto_new" not in book_name and "auto_new" not in full_name:
+            continue
+        try:
+            return book.sheets[sheet_name]
+        except Exception:
+            for sh in book.sheets:
+                if str(sh.name).casefold() == sheet_name.casefold():
+                    return sh
+    return None
+
+
+def _holland_export_headers(ws: object) -> dict[str, int]:
+    return _header_columns_canonical(ws.api, 1)
+
+
+def _auto1_holland_row_pairs(
+    ws_hol: object,
+    ws_auto: object,
+) -> tuple[dict[str, int], dict[str, int], int, int, int] | None:
+    hol_cols = _holland_export_headers(ws_hol)
+    auto_api = ws_auto.api
+    auto_hdr_row = _find_box_header_row(auto_api, max_row=15)
+    auto_cols = _header_columns_canonical(auto_api, auto_hdr_row)
+    if not hol_cols or not auto_cols:
+        return None
+
+    needed = [c for c in _FORMULA_COLUMNS_FROM_AUTO1 if c in hol_cols and c in auto_cols]
+    if not needed:
+        return None
+
+    hol_first = _HOLLAND_DATA_FIRST_ROW
+    auto_first = auto_hdr_row + 1
+    anchor_hol = hol_cols.get("packing") or hol_cols.get("description") or hol_cols.get("s2") or 3
+    hol_last = _ws_last_data_row(ws_hol, key_col=anchor_hol)
+    anchor_auto = (
+        auto_cols.get("description")
+        or auto_cols.get("packing")
+        or auto_cols.get("s2")
+        or 6
+    )
+    auto_last = int(
+        auto_api.Cells(auto_api.Rows.Count, anchor_auto).End(_XL_UP).Row
+    )
+    n_rows = min(max(0, hol_last - hol_first + 1), max(0, auto_last - auto_first + 1))
+    if n_rows < 1:
+        return None
+    return hol_cols, auto_cols, hol_first, auto_first, n_rows
+
+
+def _retarget_formula_from_auto1(
+    formula: str,
+    *,
+    auto_row: int,
+    hol_row: int,
+    auto_cols: dict[str, int],
+    hol_cols: dict[str, int],
+) -> str:
+    if not formula.startswith("="):
+        return formula
+    result = formula
+    shared = set(auto_cols) & set(hol_cols)
+    for header in shared:
+        a_let = _col_letter(auto_cols[header])
+        h_let = _col_letter(hol_cols[header])
+        result = re.sub(
+            rf"\$?{a_let}\$?{auto_row}\b",
+            f"{h_let}{hol_row}",
+            result,
+            flags=re.IGNORECASE,
+        )
+    return result
+
+
+def _retarget_quant_s1_from_auto1(
+    app: object,
+    wb_holland: object,
+    log: LogFn,
+    *,
+    auto1_sheet_name: str = "auto1",
+) -> bool:
+    """btnExport2 копирует ВПР с #ССЫЛКА! — берём формулы с листа auto1 и переназначаем колонки."""
+    ws_auto = _find_auto1_sheet(app, auto1_sheet_name)
+    if ws_auto is None:
+        log("Голландия: лист auto1 не найден — переназначение Quant/S1 пропущено")
+        return False
+
+    ws_hol = wb_holland.sheets[0]
+    mapping = _auto1_holland_row_pairs(ws_hol, ws_auto)
+    if mapping is None:
+        log("Голландия: не сопоставлены строки auto1 ↔ выгрузка")
+        return False
+    hol_cols, auto_cols, hol_first, auto_first, n_rows = mapping
+
+    hol_api = ws_hol.api
+    auto_api = ws_auto.api
+    retargeted = 0
+    for col_name in _FORMULA_COLUMNS_FROM_AUTO1:
+        if col_name not in hol_cols or col_name not in auto_cols:
+            continue
+        hc = hol_cols[col_name]
+        ac = auto_cols[col_name]
+        for i in range(n_rows):
+            hol_row = hol_first + i
+            auto_row = auto_first + i
+            try:
+                src = str(auto_api.Cells(auto_row, ac).Formula)
+            except Exception:
+                continue
+            if not src.startswith("="):
+                try:
+                    hol_api.Cells(hol_row, hc).Value = auto_api.Cells(auto_row, ac).Value2
+                    retargeted += 1
+                except Exception:
+                    pass
+                continue
+            try:
+                hol_api.Cells(hol_row, hc).Formula = _retarget_formula_from_auto1(
+                    src,
+                    auto_row=auto_row,
+                    hol_row=hol_row,
+                    auto_cols=auto_cols,
+                    hol_cols=hol_cols,
+                )
+                retargeted += 1
+            except Exception:
+                pass
+
+    if retargeted:
+        log(f"Голландия: Quant/S1 с auto1 ({n_rows} строк, ячеек: {retargeted})")
+        return True
+    log("Голландия: не удалось переназначить Quant/S1 с auto1")
+    return False
+
+
+def _copy_quant_s1_values_from_auto1(
+    app: object,
+    wb_holland: object,
+    log: LogFn,
+    *,
+    auto1_sheet_name: str = "auto1",
+) -> bool:
+    ws_auto = _find_auto1_sheet(app, auto1_sheet_name)
+    if ws_auto is None:
+        return False
+    ws_hol = wb_holland.sheets[0]
+    mapping = _auto1_holland_row_pairs(ws_hol, ws_auto)
+    if mapping is None:
+        return False
+    hol_cols, auto_cols, hol_first, auto_first, n_rows = mapping
+
+    hol_api = ws_hol.api
+    auto_api = ws_auto.api
+    copied = 0
+    for col_name in _FORMULA_COLUMNS_FROM_AUTO1:
+        if col_name not in hol_cols or col_name not in auto_cols:
+            continue
+        hc = hol_cols[col_name]
+        ac = auto_cols[col_name]
+        for i in range(n_rows):
+            try:
+                hol_api.Cells(hol_first + i, hc).Value = auto_api.Cells(
+                    auto_first + i, ac
+                ).Value2
+                copied += 1
+            except Exception:
+                pass
+    if copied:
+        log(f"Голландия: значения Quant/S1 скопированы с auto1 ({copied} ячеек)")
+    return copied > 0
+
+
+def _column_error_rows(ws: object, header_name: str) -> int:
+    headers = _header_columns(ws)
+    col = headers.get(header_name)
+    if not col:
+        return 0
+    last_row = _ws_last_data_row(ws, key_col=col)
+    api = ws.api
+    err_rows = 0
+    for row in range(_HOLLAND_DATA_FIRST_ROW, last_row + 1):
+        try:
+            if _is_excel_error_value(api.Cells(row, col).Value2):
+                err_rows += 1
+        except Exception:
+            pass
+    return err_rows
+
+
 def _ws_last_data_row(ws: object, key_col: int = 2) -> int:
     api = ws.api
     try:
@@ -422,95 +656,9 @@ def _is_excel_error_value(value: object) -> bool:
         return False
 
 
-_BROKEN_REF_TOKENS = ("#REF!", "#ССЫЛКА!")
-_LOOKUP_KEY_ORDER = ("s2", "description", "packing", "kolli", "box nr.")
-
-
-def _formula_has_broken_ref(formula: str) -> bool:
-    upper = formula.upper()
-    return any(tok in upper for tok in _BROKEN_REF_TOKENS)
-
-
-def _replace_broken_ref(formula: str, cell_ref: str) -> str:
-    for tok in _BROKEN_REF_TOKENS:
-        if tok in formula:
-            return formula.replace(tok, cell_ref, 1)
-    folded = formula.casefold()
-    for tok in _BROKEN_REF_TOKENS:
-        idx = folded.find(tok.casefold())
-        if idx >= 0:
-            return formula[:idx] + cell_ref + formula[idx + len(tok) :]
-    return formula
-
-
-def _repair_export_ref_formulas(ws: object, app: object, log: LogFn) -> None:
-    """btnExport2 копирует формулы со сломанным ключом (#REF!/ #ССЫЛКА!).
-
-    Чиним все такие колонки (Quant, S1, …), подставляя ключ из выгрузки.
-  Порядок: S2 → Description → Packing (пока Auto_new открыт).
-    """
-    api = ws.api
+def _log_data_column_errors(ws: object, log: LogFn, *, stage: str) -> None:
     headers = _header_columns(ws)
-    if not headers:
-        return
-    key_candidates = [name for name in _LOOKUP_KEY_ORDER if name in headers]
-    if not key_candidates:
-        log("Голландия: нет колонок-ключей для восстановления формул.")
-        return
-    anchor_col = headers.get("packing") or headers.get("s2") or next(iter(headers.values()))
-    last_row = _ws_last_data_row(ws, key_col=anchor_col)
-    if last_row < 2:
-        return
-
-    repaired_any = False
-    for header, col in sorted(headers.items(), key=lambda x: x[1]):
-        try:
-            probe = str(api.Cells(2, col).Formula)
-        except Exception:
-            continue
-        if not probe.startswith("=") or not _formula_has_broken_ref(probe):
-            continue
-
-        col_fixed = False
-        for key_name in key_candidates:
-            if headers.get(key_name) == col:
-                continue
-            key_letter = _col_letter(headers[key_name])
-            for row in range(2, last_row + 1):
-                try:
-                    cell = api.Cells(row, col)
-                    formula = str(cell.Formula)
-                    if not formula.startswith("="):
-                        continue
-                    if not _formula_has_broken_ref(formula):
-                        formula = probe
-                    cell.Formula = _replace_broken_ref(formula, f"{key_letter}{row}")
-                except Exception:
-                    pass
-            _calculate_workbook(app)
-            try:
-                sample = api.Cells(2, col).Value2
-            except Exception:
-                sample = None
-            if not _is_excel_error_value(sample):
-                log(
-                    f"Голландия: «{header}» восстановлена по ключу «{key_name}» "
-                    f"({key_letter}), пример={sample!r}."
-                )
-                col_fixed = True
-                repaired_any = True
-                break
-            log(f"Голландия: «{header}» — ключ «{key_name}» не подошёл, пробую следующий…")
-        if not col_fixed:
-            log(f"Голландия: «{header}» — не удалось восстановить (#ССЫЛКА!/ #ЗНАЧ!).")
-
-    if not repaired_any:
-        log("Голландия: колонок с #ССЫЛКА! в формулах не найдено.")
-
-
-def _log_frozen_column_errors(ws: object, log: LogFn) -> None:
-    headers = _header_columns(ws)
-    anchor = headers.get("packing") or headers.get("s2") or 2
+    anchor = headers.get("packing") or headers.get("s2") or 3
     last_row = _ws_last_data_row(ws, key_col=anchor)
     api = ws.api
     for name in ("quant", "s1", "s2", "description", "kolli"):
@@ -525,7 +673,7 @@ def _log_frozen_column_errors(ws: object, log: LogFn) -> None:
             except Exception:
                 pass
         if err_rows:
-            log(f"Голландия: в «{name}» после заморозки кодов ошибки: {err_rows} строк.")
+            log(f"Голландия: в «{name}» ({stage}) кодов ошибки: {err_rows} строк.")
 
 
 def _col_letter(col: int) -> str:
@@ -555,47 +703,258 @@ def _log_export_formulas(ws: object, log: LogFn) -> None:
             log("Голландия диагностика: " + "; ".join(parts))
 
 
-def fix_holland_export_after_auto1(app: object, export_dir: Path, log: LogFn) -> None:
-    """Сразу после btnExport2: пересчёт пока Auto_new открыт → значения, без чекбоксов."""
-    candidates = [
-        p for p in export_dir.glob("Голландия_1_*.xlsx") if p.is_file()
-    ]
-    if not candidates:
-        log("Голландия: файл экспорта не найден — постобработка пропущена")
-        return
-    export_path = max(candidates, key=lambda p: p.stat().st_mtime)
+def _log_export_row2_snapshot(ws: object, log: LogFn) -> None:
+    api = ws.api
+    parts: list[str] = []
+    for col in range(1, 12):
+        try:
+            cell = api.Cells(2, col)
+            parts.append(
+                f"{_col_letter(col)}2={cell.Value2!r}"
+                + (f" f={cell.Formula!r}" if str(cell.Formula).startswith("=") else "")
+            )
+        except Exception:
+            continue
+    if parts:
+        log("Голландия строка 2: " + "; ".join(parts))
 
-    wb_holland: object | None = None
+
+def _newest_holland_export(export_dir: Path) -> Path | None:
+    candidates = [p for p in export_dir.glob("Голландия_1_*.xlsx") if p.is_file()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def _find_holland_workbook(app: object, export_path: Path) -> object | None:
+    target = export_path.name.casefold()
     for book in app.books:
-        if str(book.name).casefold() == export_path.name.casefold():
-            wb_holland = book
-            break
-    opened_here = False
-    if wb_holland is None:
-        wb_holland = app.books.open(str(export_path), update_links=3)
-        opened_here = True
+        try:
+            if str(book.name).casefold() == target:
+                return book
+        except Exception:
+            continue
+    return None
+
+
+def _open_holland_workbook(
+    app: object,
+    export_path: Path,
+    *,
+    update_links: int = 3,
+) -> tuple[object, bool]:
+    wb = _find_holland_workbook(app, export_path)
+    if wb is not None:
+        return wb, False
+    return app.books.open(str(export_path), update_links=update_links), True
+
+
+def _recalculate_holland_workbook(ws: object, app: object) -> None:
+    wb_api = ws.api.Parent
+    try:
+        wb_api.UpdateLink(Name=None, Type=_XL_EXCEL_LINKS)
+    except Exception:
+        pass
+    _calculate_workbook(app)
+
+
+def _insert_marker_columns(ws: object, log: LogFn) -> bool:
+    if _marker_columns_already(ws):
+        log("Голландия: колонки A–B уже есть — сдвиг не нужен.")
+        return False
+    ws.api.Columns("A:B").Insert()
+    log("Голландия: вставлены колонки A–B (формулы сдвинуты).")
+    return True
+
+
+def _holland_last_data_row(ws: object) -> int:
+    headers = _header_columns(ws)
+    anchor = headers.get("packing") or headers.get("s2") or 3
+    return max(_HOLLAND_DATA_FIRST_ROW, _ws_last_data_row(ws, key_col=anchor))
+
+
+def _apply_holland_markers_to_workbook(
+    app: object,
+    wb: object,
+    ws: object,
+    *,
+    assets_dir: Path,
+    last_row: int,
+    log: LogFn,
+    xlsm_path: Path,
+    source_xlsx: Path | None = None,
+) -> Path:
+    assets_target = xlsm_path.parent
+    _copy_checkbox_assets(assets_dir, assets_target)
+
+    try:
+        _ensure_picture_helper_vba(wb)
+    except Exception as e:
+        log(f"Голландия: VBA helper — {e}")
+
+    vba_ok = False
+    try:
+        vba_ok = _sync_holland_markers_vba(
+            app,
+            wb,
+            first_row=_HOLLAND_DATA_FIRST_ROW,
+            last_row=last_row,
+            log=log,
+        )
+    except Exception as e:
+        log(f"Голландия: VBA недоступен ({e})")
+
+    expected = (last_row - _HOLLAND_DATA_FIRST_ROW + 1) * 2
+    btn_count = _count_marker_buttons(ws)
+    if not vba_ok and btn_count < expected:
+        log("Голландия: маркеры через COM…")
+        for warn in _inject_marker_vba(wb):
+            log(f"Голландия: VBA inject — {warn}")
+        _sync_holland_markers_com(
+            wb,
+            ws,
+            first_row=_HOLLAND_DATA_FIRST_ROW,
+            last_row=last_row,
+            assets_dir=assets_target,
+        )
+        btn_count = _count_marker_buttons(ws)
+        log(f"Голландия: маркеры готовы (COM), кнопок: {btn_count}.")
+    elif vba_ok and btn_count < expected:
+        log(
+            f"Голландия: VBA отработал, в подсчёте {btn_count}/{expected} кн. "
+            "— доверяем VBA, сохраняем как есть."
+        )
+    if not vba_ok and btn_count < expected:
+        raise RuntimeError(
+            f"Создано кнопок {btn_count} из {expected}. "
+            "Проверьте «Доверять доступ к VBA» в Excel."
+        )
+
+    try:
+        _remove_holland_edit_button(ws)
+        _wire_holland_marker_clicks(app, wb, log=log)
+    except Exception as e:
+        log(f"Голландия: подключение кликов — {e}")
+
+    wb.save()
+    log(
+        f"Голландия: маркеры {btn_count} кн., строки "
+        f"{_HOLLAND_DATA_FIRST_ROW}–{last_row} → {xlsm_path.name}"
+    )
+    if source_xlsx is not None and source_xlsx.suffix.lower() == ".xlsx":
+        if source_xlsx.resolve() != xlsm_path.resolve() and source_xlsx.exists():
+            try:
+                source_xlsx.unlink()
+            except OSError as e:
+                log(f"Голландия: не удалось удалить {source_xlsx.name} — {e}")
+    return xlsm_path.resolve()
+
+
+def finalize_holland_after_auto1(
+    app: object,
+    export_dir: Path,
+    assets_dir: Path,
+    log: LogFn,
+    *,
+    auto1_sheet_name: str = "auto1",
+) -> Path | None:
+    """После btnExport2 в том же Excel: сдвиг A–B → Quant/S1 с auto1 → пересчёт → маркеры.
+
+    btnExport2 копирует ВПР с #ССЫЛКА! в ключе; после вставки A–B формулы берём
+    с листа auto1 и переназначаем колонки под выгрузку.
+    """
+    export_path = _newest_holland_export(export_dir)
+    if export_path is None:
+        log("Голландия: файл экспорта не найден — постобработка пропущена")
+        return None
+
+    wb_holland, opened_here = _open_holland_workbook(app, export_path, update_links=3)
     ws = wb_holland.sheets[0]
     try:
+        log("Голландия: выгрузка от макроса (до вставки A–B):")
         _log_export_formulas(ws, log)
+        _log_export_row2_snapshot(ws, log)
     except Exception:
         pass
-    try:
-        _repair_export_ref_formulas(ws, app, log)
-    except Exception as e:
-        log(f"Голландия: восстановление формул пропущено — {e}")
-    _freeze_sheet_values(ws, app=app)
-    try:
-        _log_frozen_column_errors(ws, log)
-    except Exception:
-        pass
+
     removed = _delete_export_checkboxes(ws)
-    wb_holland.save()
-    if opened_here:
-        wb_holland.close()
-    log(
-        f"Голландия: {export_path.name} — формулы → значения, "
-        f"удалено чекбоксов: {removed}"
+    if removed:
+        log(f"Голландия: удалено чекбоксов экспорта: {removed}")
+
+    _insert_marker_columns(ws, log)
+
+    try:
+        log("Голландия: после вставки A–B:")
+        _log_export_formulas(ws, log)
+        _log_export_row2_snapshot(ws, log)
+    except Exception:
+        pass
+
+    try:
+        _retarget_quant_s1_from_auto1(
+            app,
+            wb_holland,
+            log,
+            auto1_sheet_name=auto1_sheet_name,
+        )
+    except Exception as e:
+        log(f"Голландия: переназначение Quant/S1 — {e}")
+
+    _recalculate_holland_workbook(ws, app)
+    try:
+        _log_data_column_errors(ws, log, stage="после пересчёта")
+    except Exception:
+        pass
+
+    if _column_error_rows(ws, "quant") or _column_error_rows(ws, "s1"):
+        try:
+            _copy_quant_s1_values_from_auto1(
+                app,
+                wb_holland,
+                log,
+                auto1_sheet_name=auto1_sheet_name,
+            )
+            _recalculate_holland_workbook(ws, app)
+            _log_data_column_errors(ws, log, stage="после копии с auto1")
+        except Exception as e:
+            log(f"Голландия: копия Quant/S1 с auto1 — {e}")
+
+    _freeze_sheet_values(ws, app=app, recalc=False)
+    try:
+        _log_data_column_errors(ws, log, stage="после заморозки")
+    except Exception:
+        pass
+
+    last_row = _holland_last_data_row(ws)
+    if last_row < _HOLLAND_DATA_FIRST_ROW:
+        log("Голландия: маркеры пропущены — нет строк данных.")
+        wb_holland.save()
+        if opened_here:
+            wb_holland.close()
+        return export_path
+
+    xlsm_path = export_path.with_suffix(".xlsm")
+    if export_path.suffix.lower() == ".xlsx":
+        wb_holland.api.SaveAs(str(xlsm_path), FileFormat=52)
+    else:
+        xlsm_path = export_path
+
+    result = _apply_holland_markers_to_workbook(
+        app,
+        wb_holland,
+        ws,
+        assets_dir=assets_dir,
+        last_row=last_row,
+        log=log,
+        xlsm_path=xlsm_path,
+        source_xlsx=export_path if export_path.suffix.lower() == ".xlsx" else None,
     )
+    if opened_here:
+        try:
+            wb_holland.close()
+        except Exception:
+            pass
+    return result
 
 def _missing_marker_assets(assets_dir: Path) -> list[str]:
     return [name for name in _CHECKBOX_BMPS if not (assets_dir / name).is_file()]
@@ -821,6 +1180,8 @@ def add_holland_row_markers(
     """
     Добавляет слева два столбца с красной/зелёной кнопкой (как в Эквадор).
     Сохраняет книгу как .xlsm с VBA; исходный .xlsx удаляется.
+
+    Для цепочки Auto1 используйте finalize_holland_after_auto1 в том же сеансе Excel.
     """
     _lg = log or _default_log
     if sys.platform != "win32":
@@ -839,15 +1200,6 @@ def add_holland_row_markers(
             "(скопируйте Red/Green_Check_*.bmp рядом с файлом)."
         )
 
-    last_row = _last_data_row_xlsx(export_path)
-    if last_row < _HOLLAND_DATA_FIRST_ROW:
-        _lg("Голландия: маркеры пропущены — нет строк данных.")
-        return export_path
-
-    assets_target = export_path.parent
-    _copy_checkbox_assets(assets_dir, assets_target)
-    xlsm_path = export_path.with_suffix(".xlsm")
-
     import xlwings as xw
 
     app: object | None = None
@@ -856,93 +1208,33 @@ def add_holland_row_markers(
         app = xw.App(visible=False, add_book=False)
         app.display_alerts = False
         app.api.AutomationSecurity = _MSO_AUTOMATION_SECURITY_LOW
-        # Ручной расчёт + без обновления ссылок: Auto_new уже закрыт,
-        # пересчёт превратил бы Quant в код ошибки (-2146826265).
-        try:
-            app.api.Calculation = -4135  # xlCalculationManual
-        except Exception:
-            pass
         wb = app.books.open(str(export_path), update_links=0)
         ws = wb.sheets[0]
-        _freeze_sheet_values(ws, app=app, recalc=False)
         removed = _delete_export_checkboxes(ws)
-        _lg(
-            f"Голландия: формулы → значения; удалено старых чекбоксов: {removed}"
-        )
-        need_insert = export_path.suffix.lower() == ".xlsx" and not _marker_columns_already(ws)
-        if need_insert:
-            ws.api.Columns("A:B").Insert()
-        elif _marker_columns_already(ws):
-            _lg("Голландия: колонки A–B уже есть — только маркеры.")
+        if removed:
+            _lg(f"Голландия: удалено чекбоксов экспорта: {removed}")
+        _insert_marker_columns(ws, _lg)
+        last_row = _holland_last_data_row(ws)
+        if last_row < _HOLLAND_DATA_FIRST_ROW:
+            _lg("Голландия: маркеры пропущены — нет строк данных.")
+            return export_path
 
+        xlsm_path = export_path.with_suffix(".xlsm")
         if export_path.suffix.lower() == ".xlsx":
             wb.api.SaveAs(str(xlsm_path), FileFormat=52)
         else:
             xlsm_path = export_path
 
-        assets_target = xlsm_path.parent
-        _copy_checkbox_assets(assets_dir, assets_target)
-
-        try:
-            _ensure_picture_helper_vba(wb)
-        except Exception as e:
-            _lg(f"Голландия: VBA helper — {e}")
-
-        vba_ok = False
-        try:
-            vba_ok = _sync_holland_markers_vba(
-                app,
-                wb,
-                first_row=_HOLLAND_DATA_FIRST_ROW,
-                last_row=last_row,
-                log=_lg,
-            )
-        except Exception as e:
-            _lg(f"Голландия: VBA недоступен ({e})")
-
-        expected = (last_row - _HOLLAND_DATA_FIRST_ROW + 1) * 2
-        btn_count = _count_marker_buttons(ws)
-        if not vba_ok and btn_count < expected:
-            _lg("Голландия: маркеры через COM…")
-            for warn in _inject_marker_vba(wb):
-                _lg(f"Голландия: VBA inject — {warn}")
-            _sync_holland_markers_com(
-                wb,
-                ws,
-                first_row=_HOLLAND_DATA_FIRST_ROW,
-                last_row=last_row,
-                assets_dir=assets_target,
-            )
-            btn_count = _count_marker_buttons(ws)
-            _lg(f"Голландия: маркеры готовы (COM), кнопок: {btn_count}.")
-        elif vba_ok and btn_count < expected:
-            _lg(
-                f"Голландия: VBA отработал, в подсчёте {btn_count}/{expected} кн. "
-                "— доверяем VBA, сохраняем как есть."
-            )
-        if not vba_ok and btn_count < expected:
-            raise RuntimeError(
-                f"Создано кнопок {btn_count} из {expected}. "
-                "Проверьте «Доверять доступ к VBA» в Excel."
-            )
-
-        try:
-            _remove_holland_edit_button(ws)
-            _wire_holland_marker_clicks(app, wb, log=_lg)
-        except Exception as e:
-            _lg(f"Голландия: подключение кликов — {e}")
-
-        wb.save()
-        _lg(
-            f"Голландия: маркеры {btn_count} кн., строки "
-            f"{_HOLLAND_DATA_FIRST_ROW}–{last_row} → {xlsm_path.name}"
+        return _apply_holland_markers_to_workbook(
+            app,
+            wb,
+            ws,
+            assets_dir=assets_dir,
+            last_row=last_row,
+            log=_lg,
+            xlsm_path=xlsm_path,
+            source_xlsx=export_path if export_path.suffix.lower() == ".xlsx" else None,
         )
-        if export_path.suffix.lower() == ".xlsx" and export_path.exists():
-            try:
-                export_path.unlink()
-            except OSError as e:
-                _lg(f"Голландия: не удалось удалить {export_path.name} — {e}")
-        return xlsm_path.resolve()
     finally:
         if wb is not None:
             try:

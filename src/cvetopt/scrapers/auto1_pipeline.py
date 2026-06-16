@@ -62,12 +62,21 @@ async def run_auto1_pipeline_job(job_id: str, env: EnvSettings) -> None:
         except Exception:
             pass
 
+    holland_cfg = yaml_cfg.holland_translate
+    marker_assets_dir = (
+        resolve_ecuador_template(env, runtime.ecuador_template_path).parent
+        if holland_cfg.add_row_markers
+        else None
+    )
+
     try:
         await asyncio.to_thread(
             run_auto1_pipeline,
             wb_path,
             cfg,
             sklad_export_dir=sklad_dir,
+            holland_marker_assets_dir=marker_assets_dir,
+            add_holland_row_markers=holland_cfg.add_row_markers,
             log=_thread_log,
         )
     except Exception as e:
@@ -98,20 +107,5 @@ async def run_auto1_pipeline_job(job_id: str, env: EnvSettings) -> None:
                 )
             except Exception as e:
                 await lg(f"Голландия: архив пропущен — {e}")
-
-    if holland_cfg.add_row_markers and newest is not None:
-        from cvetopt.invoice.holland_markers import add_holland_row_markers
-
-        assets_dir = resolve_ecuador_template(env, runtime.ecuador_template_path).parent
-        try:
-            marked = await asyncio.to_thread(
-                add_holland_row_markers,
-                newest,
-                assets_dir,
-                log=_thread_log,
-            )
-            await lg(f"Голландия: маркеры → {marked.name}")
-        except Exception as e:
-            await lg(f"Голландия: маркеры пропущены — {e}")
 
     await lg("Готово: цепочка auto1 выполнена.")
