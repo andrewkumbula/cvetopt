@@ -4,18 +4,24 @@ import email
 import hashlib
 import imaplib
 import json
+import os
 import re
+import sys
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from email.header import decode_header
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
 from cvetopt.core.runtime_settings import (
+    MailOutputLayout,
     RuntimeSettings,
+    _archive_one_entry,
+    _archive_target_path,
     load_runtime_settings,
     mail_destination_dir,
+    resolve_mail_archive_dir,
     resolve_mail_output_layout,
 )
 from cvetopt.core.settings import EnvSettings, MailConfig
@@ -102,20 +108,45 @@ def _registry_key(message_id: str, filename: str) -> str:
     return f"{message_id}|{filename}"
 
 
+def _from_matches(from_hdr: str, cfg: MailConfig) -> bool:
+    if not cfg.from_contains:
+        return True
+    low_hdr = from_hdr.lower()
+    addrs = [a.lower() for _, a in getaddresses([from_hdr]) if a]
+    for pattern in cfg.from_contains:
+        pl = pattern.lower().strip()
+        if not pl:
+            continue
+        if pl in low_hdr:
+            return True
+        if any(pl in addr or addr == pl for addr in addrs):
+            return True
+    return False
+
+
 def _matches_filters(
     from_hdr: str,
     subject: str,
     cfg: MailConfig,
 ) -> bool:
-    if cfg.from_contains:
-        low = from_hdr.lower()
-        if not any(s.lower() in low for s in cfg.from_contains):
-            return False
+    if not _from_matches(from_hdr, cfg):
+        return False
     if cfg.subject_contains:
         low = subject.lower()
         if not any(s.lower() in low for s in cfg.subject_contains):
             return False
     return True
+
+
+def _imap_search_criteria(cfg: MailConfig, since_imap: str) -> str:
+    parts: list[str] = []
+    if cfg.only_unread:
+        parts.append("UNSEEN")
+    parts.append(f"SINCE {since_imap}")
+    from_emails = [s.strip() for s in cfg.from_contains if "@" in s]
+    if len(from_emails) == 1:
+        parts.append(f'FROM "{from_emails[0]}"')
+    return "(" + " ".join(parts) + ")"
 
 
 def _extension_ok(filename: str, cfg: MailConfig) -> bool:
@@ -274,6 +305,71 @@ def dedupe_mail_downloads_by_content(
     return removed
 
 
+def archive_stale_mail_attachments(
+    layout: MailOutputLayout,
+    archive_dir: Path,
+    *,
+    keep_paths: Sequence[Path],
+    cfg: MailConfig,
+    log: LogFn | None = None,
+) -> tuple[Path | None, list[str], list[str]]:
+    """
+    После скачивания новых вложений переносит остальные .xls/.xlsx
+    из папок почты 1 и 2 в архив (новые файлы остаются).
+    """
+    def _log(msg: str) -> None:
+        if log is not None:
+            log(msg)
+
+    archive_dir = archive_dir.resolve()
+    short_dir = layout.short_dir.resolve()
+    long_dir = layout.long_dir.resolve()
+    if archive_dir in (short_dir, long_dir):
+        raise ValueError("Папка архива почты не может совпадать с папками 1 или 2.")
+
+    keep = {p.resolve() for p in keep_paths}
+    candidates: list[Path] = []
+    for out_dir in (short_dir, long_dir):
+        candidates.extend(_mail_files_in_dir(out_dir, cfg))
+
+    to_move = [p for p in candidates if p.resolve() not in keep]
+    if not to_move:
+        _log("Почта: старых файлов для архива нет")
+        return None, [], []
+
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    moved: list[str] = []
+    warnings: list[str] = []
+
+    if sys.platform == "win32" and not os.access(archive_dir, os.W_OK):
+        import getpass
+
+        warnings.append(
+            f"Папка архива {archive_dir}: нет записи для «{getpass.getuser()}»."
+        )
+
+    for src in sorted(to_move, key=lambda p: p.name.lower()):
+        target = _archive_target_path(archive_dir, src, stamp)
+        if not os.access(src, os.R_OK):
+            warnings.append(f"{src.name}: пропуск (нет чтения)")
+            continue
+        try:
+            warn = _archive_one_entry(src, target)
+            moved.append(src.name)
+            if warn:
+                warnings.append(warn)
+        except OSError as e:
+            warnings.append(f"{src.name}: не удалось архивировать — {e}")
+
+    if moved:
+        _log(f"Почта: в архив {len(moved)} → {archive_dir}")
+    for warn in warnings:
+        _log(f"Почта (архив): {warn}")
+
+    return (archive_dir if moved else None), moved, warnings
+
+
 def collect_mail_attachments(
     cfg: MailConfig,
     env: EnvSettings,
@@ -325,6 +421,11 @@ def collect_mail_attachments(
     )
     _log(f"Почта: папка 2 (длинные имена): {layout.long_dir}")
 
+    if cfg.from_contains:
+        _log(f"Почта: только от отправителя: {', '.join(cfg.from_contains)}")
+    if cfg.subject_contains:
+        _log(f"Почта: фильтр темы: {', '.join(cfg.subject_contains)}")
+
     since = date.today() - timedelta(days=cfg.lookback_days)
     since_imap = since.strftime("%d-%b-%Y")
 
@@ -360,15 +461,13 @@ def collect_mail_attachments(
         if status != "OK":
             raise RuntimeError(f"Не удалось открыть папку {cfg.folder!r}")
 
-        criteria = f'(SINCE {since_imap})'
-        if cfg.only_unread:
-            criteria = f'(UNSEEN SINCE {since_imap})'
+        criteria = _imap_search_criteria(cfg, since_imap)
         status, data = imap.search(None, criteria)
         if status != "OK":
             raise RuntimeError(f"IMAP SEARCH не удался: {criteria}")
 
         ids = (data[0] or b"").split()
-        _log(f"Писем за последние {cfg.lookback_days} дн. (с {since.isoformat()}): {len(ids)}")
+        _log(f"Писем по IMAP {criteria} за {cfg.lookback_days} дн.: {len(ids)}")
         known_filenames = _collect_known_filenames(
             registry_keys, registry_entries, layout.short_dir, layout.long_dir
         )
@@ -498,6 +597,20 @@ def collect_mail_attachments(
     dedupe_mail_downloads_by_content(
         [layout.short_dir, layout.long_dir], cfg, log=_log
     )
+    if cfg.archive_previous_on_download and saved:
+        try:
+            archive_dir = resolve_mail_archive_dir(env, runtime, layout, cfg)
+            archive_stale_mail_attachments(
+                layout,
+                archive_dir,
+                keep_paths=saved,
+                cfg=cfg,
+                log=_log,
+            )
+        except Exception as e:
+            _log(f"Почта: архив пропущен — {e}")
+    elif cfg.archive_previous_on_download and not saved:
+        _log("Почта: архив не нужен — новых вложений не скачано")
     _log(
         f"Готово: новых файлов {len(saved)}; каталоги: {layout.short_dir} и {layout.long_dir}"
     )

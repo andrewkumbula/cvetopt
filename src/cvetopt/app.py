@@ -25,6 +25,7 @@ from cvetopt.core.runtime_settings import (
     validate_ecuador_paths,
     validate_holland_translate_paths,
     validate_mail_output_dirs,
+    validate_mail_archive_dir,
 )
 from cvetopt.core.settings import EnvSettings, SelectionOverride
 from cvetopt.core.testing_reset import reset_testing_state
@@ -175,6 +176,13 @@ async def api_runtime_settings_update(request: Request) -> JSONResponse:
         mail_err = validate_mail_output_dirs(env, settings)
         if mail_err:
             return JSONResponse({"error": mail_err}, status_code=422)
+        mail_arch_err = validate_mail_archive_dir(
+            env,
+            settings,
+            raw_archive_dir=settings.mail_archive_dir,
+        )
+        if mail_arch_err:
+            return JSONResponse({"error": mail_arch_err}, status_code=422)
 
         save_runtime_settings(env, settings)
         return JSONResponse({"ok": True, "settings": settings.model_dump()})

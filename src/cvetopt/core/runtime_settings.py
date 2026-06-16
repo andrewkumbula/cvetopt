@@ -75,6 +75,7 @@ class RuntimeSettings(BaseModel):
     mail_output_dir_short: str = Field(default=DEFAULT_MAIL_OUTPUT_DIR_SHORT)
     mail_output_dir_long: str = Field(default=DEFAULT_MAIL_OUTPUT_DIR_LONG)
     mail_filename_short_max_len: int = Field(default=DEFAULT_MAIL_FILENAME_SHORT_MAX_LEN)
+    mail_archive_dir: str = Field(default="")
     auto_new_workbook_path: str = Field(default=DEFAULT_AUTO_NEW_WORKBOOK)
     holland_dictionary_path: str = Field(default=DEFAULT_HOLLAND_DICTIONARY)
     holland_sklad_output_dir: str = Field(default=DEFAULT_HOLLAND_SKLAD_DIR)
@@ -140,6 +141,53 @@ def mail_destination_dir(filename: str, layout: MailOutputLayout) -> Path:
     if is_short_mail_filename(filename, layout.short_max_len):
         return layout.short_dir
     return layout.long_dir
+
+
+def resolve_mail_archive_dir(
+    env: EnvSettings,
+    runtime: RuntimeSettings,
+    layout: MailOutputLayout,
+    mail_cfg: MailConfig | None = None,
+) -> Path:
+    """Пусто в UI/config → <родитель папки 1>/архив."""
+    yaml_mail = mail_cfg or env.yaml_config().mail
+    raw = (
+        (runtime.mail_archive_dir or "").strip()
+        or (yaml_mail.archive_dir or "").strip()
+    )
+    default = layout.short_dir.parent / BIFLORICA_ARCHIVE_SUBDIR
+    if not raw:
+        return default.resolve()
+    return _resolve_dir(env, raw, str(default))
+
+
+def validate_mail_archive_dir(
+    env: EnvSettings,
+    runtime: RuntimeSettings,
+    *,
+    raw_archive_dir: str = "",
+) -> str | None:
+    try:
+        layout = resolve_mail_output_layout(env, runtime)
+        arch = resolve_mail_archive_dir(
+            env,
+            runtime.model_copy(update={"mail_archive_dir": raw_archive_dir}),
+            layout,
+        )
+    except (OSError, ValueError) as e:
+        return f"Почта, архив: некорректный путь — {e}"
+    if arch.exists() and not arch.is_dir():
+        return "Почта, архив: путь существует, но это не папка."
+    try:
+        arch.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"Почта, архив: не удалось создать папку — {e}"
+    short = layout.short_dir.resolve()
+    long = layout.long_dir.resolve()
+    arch_r = arch.resolve()
+    if arch_r in (short, long):
+        return "Почта: папка архива не может совпадать с папками 1 или 2."
+    return None
 
 
 def validate_mail_output_dirs(env: EnvSettings, runtime: RuntimeSettings) -> str | None:

@@ -134,6 +134,8 @@ mail:
   dedupe_same_content: true
   clear_price_total_in_short: true
   allowed_extensions: [".xlsx", ".xls"]
-  # Фильтры (пустые списки = все письма за период):
-  from_contains: []
+  # Только вложения из писем этого отправителя (пустой список = все письма):
+  from_contains:
+    - noreply@enigmaflowers.nl
   subject_contains: []
+  archive_previous_on_download: true

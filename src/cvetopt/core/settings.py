@@ -244,8 +244,13 @@ class MailConfig(BaseModel):
     clear_price_total_in_short: bool = True
     allowed_extensions: list[str] = Field(default_factory=lambda: [".xlsx", ".xls"])
     # Пустой список = не фильтровать. Иначе — хотя бы одна подстрока должна совпасть.
-    from_contains: list[str] = Field(default_factory=list)
+    from_contains: list[str] = Field(
+        default_factory=lambda: ["noreply@enigmaflowers.nl"]
+    )
     subject_contains: list[str] = Field(default_factory=list)
+    # После скачивания новых вложений — старые .xls/.xlsx из папок 1 и 2 в архив.
+    archive_previous_on_download: bool = True
+    archive_dir: str = ""
 
 
 class DelmirConfig(BaseModel):
