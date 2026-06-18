@@ -27,6 +27,8 @@ _SHEET_DATA = 0
 _SHEET_PATH = 1
 _DATA_FIRST_ROW = 7
 _CLEAR_LAST_ROW = 500
+_COL_DATA_FIRST = 4  # D
+_COL_DATA_LAST = 28  # AB
 # Макросы должны быть включены при открытии книги — иначе Run требует переоткрытия.
 _MSO_AUTOMATION_SECURITY_LOW = 1
 _WORK_COPY_NAME = "_cvetopt_ecuador_work.xlsm"
@@ -50,6 +52,7 @@ Public Sub cv_Run_CreateFile(aSaveDir As String)
     If saveDir = "" Then Exit Sub
     aName = "Эквадор " & Format(Now(), "d/m/yy hh.nn") & ".xlsm"
     aPath = saveDir & "\\" & aName
+    Call cv_ClearDataNotes(7, 500)
     ThisWorkbook.Save
     ThisWorkbook.SaveAs aPath
     With Workbooks(aName).Sheets(1)
@@ -102,6 +105,28 @@ Public Sub cv_SyncRowCheckboxes(aFirst As Long, aLast As Long)
             End If
         Next aI
     End With
+End Sub
+"""
+_CV_CLEAR_NOTES_MACRO = "cv_ClearDataNotes"
+_CV_CLEAR_NOTES_VBA = """
+Public Sub cv_ClearDataNotes(aFirst As Long, aLast As Long)
+    Dim aSheet As Worksheet
+    Dim rng As Range
+    Dim c As Range
+    If aLast < aFirst Then Exit Sub
+    Set aSheet = ThisWorkbook.Sheets(1)
+    Set rng = aSheet.Range("D" & aFirst & ":AB" & aLast)
+    On Error Resume Next
+    rng.ClearComments
+    rng.ClearNotes
+    On Error GoTo 0
+    For Each c In rng.Cells
+        On Error Resume Next
+        c.ClearNote
+        If Not c.Comment Is Nothing Then c.Comment.Delete
+        If Not c.CommentThread Is Nothing Then c.CommentThread.Delete
+        On Error GoTo 0
+    Next c
 End Sub
 """
 
@@ -322,48 +347,200 @@ def _open_workbook_quiet(app: object, path: Path) -> object:
     return app.books[-1]
 
 
-def _clear_data_sheet_area(sheet: object) -> None:
-    """Содержимое и примечания шаблона («0» в углу ячейки) в зоне данных.
+def _cell_has_annotation(cell_api: object) -> bool:
+    try:
+        if cell_api.Comment is not None:
+            return True
+    except Exception:
+        pass
+    try:
+        if getattr(cell_api, "Note", None) is not None:
+            return True
+    except Exception:
+        pass
+    try:
+        if cell_api.CommentThread is not None:
+            return True
+    except Exception:
+        pass
+    return False
 
-    В Excel 365 жёлтые «0» — это Notes (бывшие Comments); ClearComments их не снимает.
-    Ручная обработка в шаблоне обычно чистит лист своим макросом, мы — через Python.
-    """
+
+def _strip_cell_annotation(cell_api: object) -> None:
+    for method_name in ("ClearNote",):
+        try:
+            getattr(cell_api, method_name)()
+        except Exception:
+            pass
+    try:
+        comment = cell_api.Comment
+        if comment is not None:
+            comment.Delete()
+    except Exception:
+        pass
+    try:
+        note = getattr(cell_api, "Note", None)
+        if note is not None:
+            note.Delete()
+    except Exception:
+        pass
+    try:
+        thread = cell_api.CommentThread
+        if thread is not None:
+            thread.Delete()
+    except Exception:
+        pass
+
+
+def _strip_range_annotations_python(
+    sheet: object,
+    *,
+    first_row: int,
+    last_row: int,
+    first_col: int = _COL_DATA_FIRST,
+    last_col: int = _COL_DATA_LAST,
+) -> int:
+    """Построчно ClearNote/Comment — запасной путь, если VBA недоступен."""
+    api = sheet.api
+    removed = 0
+    for row in range(first_row, last_row + 1):
+        for col in range(first_col, last_col + 1):
+            cell = api.Cells(row, col)
+            if _cell_has_annotation(cell):
+                removed += 1
+            _strip_cell_annotation(cell)
+    return removed
+
+
+def _ensure_cv_clear_notes_macro(wb: object) -> None:
+    vb = wb.api.VBProject
+    ensure_vba_references(vb)
+    mod = vb.VBComponents("Module1").CodeModule
+    line_count = int(mod.CountOfLines)
+    existing = mod.Lines(1, line_count) if line_count else ""
+    if f"Sub {_CV_CLEAR_NOTES_MACRO}" in existing:
+        return
+    mod.InsertLines(line_count + 1, _CV_CLEAR_NOTES_VBA)
+
+
+def _run_clear_data_notes_macro(
+    wb: object,
+    *,
+    first_row: int,
+    last_row: int,
+    log: LogFn | None = None,
+) -> bool:
+    if last_row < first_row:
+        return True
+
+    def _lg(msg: str) -> None:
+        if log is not None:
+            log(msg)
+
+    try:
+        _ensure_cv_clear_notes_macro(wb)
+    except Exception as e:
+        _lg(f"Эквадор: макрос очистки примечаний — не вставлен ({e})")
+        return False
+
+    app = wb.app.api
+    wb_name = str(wb.name)
+    errors: list[str] = []
+    for spec in (
+        _CV_CLEAR_NOTES_MACRO,
+        f"Module1.{_CV_CLEAR_NOTES_MACRO}",
+        f"'{wb_name}'!{_CV_CLEAR_NOTES_MACRO}",
+    ):
+        try:
+            app.Run(spec, first_row, last_row)
+            _lg(f"Эквадор: очистка примечаний VBA, строки {first_row}–{last_row}")
+            return True
+        except Exception as e:
+            errors.append(f"{spec}: {e}")
+    _lg(
+        "Эквадор: макрос очистки примечаний не запустился "
+        f"({errors[-1] if errors else '?'}) — Python."
+    )
+    return False
+
+
+def _strip_range_annotations(
+    sheet: object,
+    *,
+    first_row: int,
+    last_row: int,
+    first_col: int = _COL_DATA_FIRST,
+    last_col: int = _COL_DATA_LAST,
+    wb: object | None = None,
+    log: LogFn | None = None,
+) -> int:
+    if (
+        wb is not None
+        and first_col == _COL_DATA_FIRST
+        and last_col == _COL_DATA_LAST
+    ):
+        _run_clear_data_notes_macro(
+            wb,
+            first_row=first_row,
+            last_row=last_row,
+            log=log,
+        )
+    return _strip_range_annotations_python(
+        sheet,
+        first_row=first_row,
+        last_row=last_row,
+        first_col=first_col,
+        last_col=last_col,
+    )
+
+
+def _clear_data_sheet_area(
+    sheet: object,
+    *,
+    wb: object | None = None,
+    log: LogFn | None = None,
+) -> int:
+    """Содержимое и примечания шаблона («0» в углу ячейки) в зоне данных."""
     addr = f"D{_DATA_FIRST_ROW}:AB{_CLEAR_LAST_ROW}"
-    rng = sheet.range(addr)
-    rng.clear_contents()
-    api_rng = rng.api
+    sheet.range(addr).clear_contents()
+    api_rng = sheet.range(addr).api
     for method in ("ClearNotes", "ClearComments"):
         try:
             getattr(api_rng, method)()
         except Exception:
             pass
-    try:
-        for cell in api_rng:
-            for attr in ("Note", "Comment"):
-                try:
-                    obj = getattr(cell, attr, None)
-                    if obj is None:
-                        continue
-                    delete = getattr(obj, "Delete", None)
-                    if callable(delete):
-                        delete()
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    return _strip_range_annotations(
+        sheet,
+        first_row=_DATA_FIRST_ROW,
+        last_row=_CLEAR_LAST_ROW,
+        wb=wb,
+        log=log,
+    )
+
+
+def _set_cell_value(sheet: object, row: int, col: int, value: object) -> None:
+    cell = sheet.api.Cells(row, col)
+    _strip_cell_annotation(cell)
+    sheet.range((row, col)).value = value
+
+
+def _set_cell_value_ref(sheet: object, ref: str, value: object) -> None:
+    rng = sheet.range(ref)
+    _strip_cell_annotation(rng.api)
+    rng.value = value
 
 
 def _write_deal_row(sheet: object, row: int, deal: EcuadorDealRow) -> None:
-    sheet.range((row, 4)).value = deal.plantation
-    sheet.range((row, 5)).value = deal.flower_type
-    sheet.range((row, 6)).value = deal.variety
-    sheet.range((row, 15)).value = deal.boxes
-    sheet.range((row, 16)).value = deal.sm
-    sheet.range((row, 17)).value = deal.box_type
-    sheet.range((row, 18)).value = deal.total_stems
+    _set_cell_value(sheet, row, 4, deal.plantation)
+    _set_cell_value(sheet, row, 5, deal.flower_type)
+    _set_cell_value(sheet, row, 6, deal.variety)
+    _set_cell_value(sheet, row, 15, deal.boxes)
+    _set_cell_value(sheet, row, 16, deal.sm)
+    _set_cell_value(sheet, row, 17, deal.box_type)
+    _set_cell_value(sheet, row, 18, deal.total_stems)
     for col_letter, value in deal.qty_by_length_col.items():
         if value:
-            sheet.range(f"{col_letter}{row}").value = value
+            _set_cell_value_ref(sheet, f"{col_letter}{row}", value)
 
 
 def _copy_checkbox_assets(template_dir: Path, target_dir: Path) -> None:
@@ -502,6 +679,7 @@ def _sync_row_checkboxes(
 
 
 def _ensure_cv_create_macro(wb: object) -> None:
+    _ensure_cv_clear_notes_macro(wb)
     mod = wb.api.VBProject.VBComponents("Module1").CodeModule
     line_count = int(mod.CountOfLines)
     existing = mod.Lines(1, line_count) if line_count else ""
@@ -526,6 +704,12 @@ def _invoke_create_file_macro(
     _lg("Эквадор: «Создать файл» (макрос VBA)…")
     try:
         _ensure_cv_create_macro(wb)
+        _run_clear_data_notes_macro(
+            wb,
+            first_row=_DATA_FIRST_ROW,
+            last_row=_CLEAR_LAST_ROW,
+            log=log,
+        )
     except Exception as e:
         raise RuntimeError(
             "Не удалось добавить макрос «Создать файл». Включите в Excel "
@@ -781,10 +965,27 @@ def create_ecuador_file_from_biflorica(
         path_sheet.range("A2").value = "False"
 
         _lg("Эквадор: заполняю строки…")
-        _clear_data_sheet_area(data_sheet)
+        removed_tpl = _clear_data_sheet_area(data_sheet, wb=wb, log=log)
+        if removed_tpl:
+            _lg(f"Эквадор: снято примечаний шаблона (Python): {removed_tpl}")
+
         last_row = _DATA_FIRST_ROW + len(deals) - 1
-        for idx, deal in enumerate(deals):
-            _write_deal_row(data_sheet, _DATA_FIRST_ROW + idx, deal)
+        app_api = app.api
+        app_api.EnableEvents = False
+        try:
+            for idx, deal in enumerate(deals):
+                _write_deal_row(data_sheet, _DATA_FIRST_ROW + idx, deal)
+            removed_fill = _strip_range_annotations(
+                data_sheet,
+                first_row=_DATA_FIRST_ROW,
+                last_row=last_row,
+                wb=wb,
+                log=log,
+            )
+            if removed_fill:
+                _lg(f"Эквадор: снято примечаний после заполнения (Python): {removed_fill}")
+        finally:
+            app_api.EnableEvents = True
 
         path_sheet.range("A1").value = str(biflorica_path)
         path_sheet.range("B1").value = biflorica_path.name
@@ -801,8 +1002,33 @@ def create_ecuador_file_from_biflorica(
         except Exception as e:
             _lg(f"Эквадор: чекбоксы не созданы ({e}) — продолжаю без них.")
 
+        app_api.EnableEvents = False
+        try:
+            removed_after = _strip_range_annotations(
+                data_sheet,
+                first_row=_DATA_FIRST_ROW,
+                last_row=last_row,
+                wb=wb,
+                log=log,
+            )
+            if removed_after:
+                _lg(f"Эквадор: снято примечаний после чекбоксов (Python): {removed_after}")
+        finally:
+            app_api.EnableEvents = True
+
+        removed_final = _strip_range_annotations(
+            data_sheet,
+            first_row=_DATA_FIRST_ROW,
+            last_row=last_row,
+            wb=wb,
+            log=log,
+        )
+        if removed_final:
+            _lg(f"Эквадор: снято примечаний перед сохранением (Python): {removed_final}")
+
         if use_create_file_macro:
             try:
+                _ensure_cv_clear_notes_macro(wb)
                 out_path = _invoke_create_file_macro(
                     wb,
                     path_sheet,
