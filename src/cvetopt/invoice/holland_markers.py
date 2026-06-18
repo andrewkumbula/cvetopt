@@ -922,11 +922,14 @@ def finalize_holland_after_auto1(
     *,
     auto1_sheet_name: str = "auto1",
 ) -> Path | None:
-    """После btnExport2 в том же Excel: сдвиг A–B → Quant/S1 с auto1 → пересчёт → маркеры.
+    """Постобработка готовой выгрузки btnExport2: добавить слева 2 столбца с красным/
+    зелёным квадратом (как в Эквадоре) и макрос клика (красный — строка краснеет,
+    зелёный — зеленеет). Данные НЕ меняем: btnExport2 их уже сформировал верно.
 
-    btnExport2 копирует ВПР с #ССЫЛКА! в ключе; после вставки A–B формулы берём
-    с листа auto1 и переназначаем колонки под выгрузку.
+    Порядок: заморозить значения (пока Auto_new открыт) → убрать родные чекбоксы →
+    вставить A–B → расставить квадраты → подключить обработчик клика → .xlsm.
     """
+    _ = auto1_sheet_name  # auto1 не трогаем — данные уже корректны от настоящих кнопок
     export_path = _newest_holland_export(export_dir)
     if export_path is None:
         log("Голландия: файл экспорта не найден — постобработка пропущена")
@@ -935,48 +938,33 @@ def finalize_holland_after_auto1(
     wb_holland, opened_here = _open_holland_workbook(app, export_path, update_links=3)
     ws = wb_holland.sheets[0]
     try:
-        log("Голландия: выгрузка от макроса (до вставки A–B):")
-        _log_export_formulas(ws, log)
+        log("Голландия: выгрузка от макроса (до маркеров):")
         _log_export_row2_snapshot(ws, log)
     except Exception:
         pass
 
-    removed = _delete_export_checkboxes(ws)
-    if removed:
-        log(f"Голландия: удалено чекбоксов экспорта: {removed}")
-
-    _insert_marker_columns(ws, log)
-
-    try:
-        log("Голландия: после вставки A–B:")
-        _log_export_formulas(ws, log)
-        _log_export_row2_snapshot(ws, log)
-    except Exception:
-        pass
-
-    try:
-        _fill_quant_s1_from_auto1(
-            app,
-            wb_holland,
-            log,
-            auto1_sheet_name=auto1_sheet_name,
-        )
-    except Exception as e:
-        log(f"Голландия: Quant/S1 с auto1 — {e}")
-
-    _recalculate_holland_workbook(ws, app)
-    try:
-        _log_data_column_errors(ws, log, stage="после Quant/S1 с auto1")
-    except Exception:
-        pass
-
-    _freeze_sheet_values(ws, app=app, recalc=False)
+    # 1) Заморозка значений ПОКА Auto_new открыт — формулы со ссылками на источник
+    #    станут числами (иначе после вставки колонок/закрытия книги — #ССЫЛКА!).
+    _freeze_sheet_values(ws, app=app, recalc=True)
     try:
         _log_data_column_errors(ws, log, stage="после заморозки")
     except Exception:
         pass
 
+    # 2) Родные чекбоксы экспорта убираем — слева будут A–B квадраты.
+    removed = _delete_export_checkboxes(ws)
+    if removed:
+        log(f"Голландия: удалено чекбоксов экспорта: {removed}")
+
     last_row = _holland_last_data_row(ws)
+
+    # 3) Два столбца слева под красный/зелёный квадрат (данные уже значения — не ломаются).
+    _insert_marker_columns(ws, log)
+    try:
+        _log_export_row2_snapshot(ws, log)
+    except Exception:
+        pass
+
     log(f"Голландия: строк данных для маркеров: {_HOLLAND_DATA_FIRST_ROW}–{last_row}")
     if last_row < _HOLLAND_DATA_FIRST_ROW:
         log("Голландия: маркеры пропущены — нет строк данных.")

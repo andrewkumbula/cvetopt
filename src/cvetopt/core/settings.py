@@ -179,8 +179,8 @@ class HollandTranslateConfig(BaseModel):
     archive_previous_on_auto1: bool = True
     # Без перевода в словаре — дописать Description в колонку B (C пустая).
     append_missing_to_dictionary: bool = True
-    # btnExport2 уже отдаёт складской файл с чекбоксами и фото — постобработка ломала данные.
-    add_row_markers: bool = False
+    # После выгрузки — слева A–B с красным/зелёным квадратом (как Эквадор) + макрос клика.
+    add_row_markers: bool = True
 
 
 class EcuadorCreateConfig(BaseModel):
