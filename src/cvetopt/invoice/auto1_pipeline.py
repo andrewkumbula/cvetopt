@@ -37,6 +37,36 @@ _XL_UP = -4162
 _XL_PASTE_VALUES = -4163
 _XL_ASCENDING = 1
 _XL_SORT_NO_HEADER = 2
+_XL_CALC_AUTOMATIC = -4105
+
+# Пауза между «нажатиями» кнопок (как при ручной работе) — Excel успевает обработать.
+_DEFAULT_STEP_DELAY_SEC = 3.0
+
+
+def _step_delay_seconds() -> float:
+    raw = os.getenv("AUTO1_STEP_DELAY_SEC", "")
+    if raw.strip():
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return _DEFAULT_STEP_DELAY_SEC
+
+
+def _settle_excel(app: object, log: LogFn, *, seconds: float, why: str) -> None:
+    """Пауза + пересчёт между шагами — имитация паузы человека между кликами."""
+    if seconds <= 0:
+        return
+    try:
+        app.api.Calculate()
+    except Exception:
+        pass
+    log(f"  пауза {seconds:.0f} с ({why})…")
+    time.sleep(seconds)
+    try:
+        app.api.Calculate()
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -211,6 +241,26 @@ def _sort_auto1_sheet(sheet: object, log: LogFn) -> None:
     log("Sort: готово (Python)")
 
 
+def _run_sort_step(
+    app: object,
+    wb: object,
+    sheet: object,
+    macro: str,
+    log: LogFn,
+) -> None:
+    """Настоящий btnSort_Click (как ручное нажатие): он же готовит колонки/служебные
+    поля, на которые опирается btnExport2. Python-сортировка — только запасной путь,
+    если макрос недоступен (она не воспроизводит подготовку колонок для экспорта).
+    """
+    try:
+        log(f"Шаг «Sort»: настоящий макрос {macro}…")
+        _invoke_sheet_click_macro(app, wb, sheet, macro, log)
+        return
+    except Exception as e:
+        log(f"Шаг «Sort»: макрос {macro} не сработал ({e}) — Python-сортировка.")
+    _sort_auto1_sheet(sheet, log)
+
+
 def _prepare_sklad_export(app: object, wb: object, log: LogFn) -> None:
     """btnExport2 создаёт новую книгу и SaveAs — без папок/экрана часто «висит» с диалогом."""
     api = app.api
@@ -375,6 +425,11 @@ def run_auto1_pipeline(
         app.display_alerts = False
         app.screen_updating = True
         app.api.EnableEvents = True
+        # Автоматический пересчёт — как в обычной сессии Excel при ручной работе.
+        try:
+            app.api.Calculation = _XL_CALC_AUTOMATIC
+        except Exception:
+            pass
         # 1 = msoAutomationSecurityLow — иначе Run может блокироваться политикой.
         try:
             app.api.AutomationSecurity = 1
@@ -394,25 +449,33 @@ def run_auto1_pipeline(
         codename = sheet.api.CodeName
         _lg(f"Лист «{cfg.sheet_name}» (код VBA: {codename})")
 
-        for label, macro in PIPELINE_STEPS:
+        step_delay = _step_delay_seconds()
+        _lg(
+            "Жмём кнопки auto1 по порядку, как вручную "
+            f"(пауза между шагами {step_delay:.0f} с; AUTO1_STEP_DELAY_SEC меняет)."
+        )
+
+        for idx, (label, macro) in enumerate(PIPELINE_STEPS):
             step_t0 = time.monotonic()
+            if idx > 0:
+                _settle_excel(app, _lg, seconds=step_delay, why=f"перед «{label}»")
             _prepare_macro_step(app)
+            sheet.activate()
+            _lg(f"Шаг «{label}»: жму {macro}…")
+            if label == "For sklad":
+                _prepare_sklad_export(app, wb, _lg)
+                _lg(
+                    "Экспорт для склада (btnExport2) — обычно 30–120 с; "
+                    "если дольше 5 мин — откройте Excel (AUTO1_EXCEL_VISIBLE=1) "
+                    "или остановите прогон."
+                )
             if label == "Sort":
-                _lg("Шаг «Sort»: сортировка по Description (Python)…")
                 _run_with_heartbeat(
                     label,
-                    lambda: _sort_auto1_sheet(sheet, _lg),
+                    lambda m=macro: _run_sort_step(app, wb, sheet, m, _lg),
                     _lg,
                 )
             else:
-                _lg(f"Шаг «{label}»: {macro}…")
-                if label == "For sklad":
-                    _prepare_sklad_export(app, wb, _lg)
-                    _lg(
-                        "Экспорт для склада (btnExport2) — обычно 30–120 с; "
-                        "если дольше 5 мин — откройте Excel (AUTO1_EXCEL_VISIBLE=1) "
-                        "или остановите прогон."
-                    )
                 _run_with_heartbeat(
                     label,
                     lambda m=macro: _invoke_sheet_click_macro(app, wb, sheet, m, _lg),
@@ -421,7 +484,7 @@ def run_auto1_pipeline(
             done.append(
                 Auto1StepResult(
                     label=label,
-                    macro="python_sort" if label == "Sort" else macro,
+                    macro=macro,
                 )
             )
             _lg(f"Шаг «{label}» завершён ({time.monotonic() - step_t0:.1f} с).")
