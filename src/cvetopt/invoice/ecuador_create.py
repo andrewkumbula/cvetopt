@@ -323,12 +323,32 @@ def _open_workbook_quiet(app: object, path: Path) -> object:
 
 
 def _clear_data_sheet_area(sheet: object) -> None:
-    """Содержимое и примечания шаблона («0» в углу ячейки) в зоне данных."""
+    """Содержимое и примечания шаблона («0» в углу ячейки) в зоне данных.
+
+    В Excel 365 жёлтые «0» — это Notes (бывшие Comments); ClearComments их не снимает.
+    Ручная обработка в шаблоне обычно чистит лист своим макросом, мы — через Python.
+    """
     addr = f"D{_DATA_FIRST_ROW}:AB{_CLEAR_LAST_ROW}"
     rng = sheet.range(addr)
     rng.clear_contents()
+    api_rng = rng.api
+    for method in ("ClearNotes", "ClearComments"):
+        try:
+            getattr(api_rng, method)()
+        except Exception:
+            pass
     try:
-        rng.api.ClearComments()
+        for cell in api_rng:
+            for attr in ("Note", "Comment"):
+                try:
+                    obj = getattr(cell, attr, None)
+                    if obj is None:
+                        continue
+                    delete = getattr(obj, "Delete", None)
+                    if callable(delete):
+                        delete()
+                except Exception:
+                    pass
     except Exception:
         pass
 
