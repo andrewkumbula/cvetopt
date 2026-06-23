@@ -25,7 +25,7 @@ if errorlevel 1 (
   where python >nul 2>nul
   if errorlevel 1 (
     echo [cvetopt] Не найдены ни uv, ни python. Установите Python 3.11+ и: python -m pip install uv
-    pause
+    if not "%CVETOPT_HIDDEN%"=="1" pause
     exit /b 1
   )
   set "UV_CMD=python -m uv"
@@ -58,5 +58,5 @@ if "%EXIT_CODE%"=="42" (
 
 REM Любой другой код — выходим, не зацикливаемся.
 echo [cvetopt] uvicorn завершился с кодом %EXIT_CODE%. Выход.
-pause
+if not "%CVETOPT_HIDDEN%"=="1" pause
 exit /b %EXIT_CODE%
