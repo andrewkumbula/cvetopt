@@ -292,8 +292,10 @@ def compute_transport_writes(
     awb_to_cost: dict[str, float],
 ) -> tuple[dict[tuple[int, int], float], list[str], list[str]]:
     """
-    Считает значения «Транспорт трак» по правилу: общий cost делится пропорционально весу
-    для всех строк с одинаковым AWB. Возвращает (writes, missing_awbs, notes).
+    Считает значения «Транспорт трак»: для каждого AWB — одна запись в первой
+    строке с этим номером (полная стоимость с del-mir). Если в Auto_new два
+    одинаковых AWB — в «Транспорт трак» подставляется только одно значение.
+    Возвращает (writes, missing_awbs, notes).
     """
     by_awb: dict[str, list[TransportTarget]] = {}
     for t in targets:
@@ -310,17 +312,17 @@ def compute_transport_writes(
             continue
         if matched_key and matched_key != awb:
             notes.append(f"AWB {awb}: сопоставлен с del-mir ключом {matched_key} (без check-digit).")
-        total_w = sum(t.weight for t in items)
-        if total_w <= 0:
-            notes.append(f"AWB {awb}: суммарный вес = 0 — пропуск")
+        if not items:
             continue
-        for t in items:
-            share = round(cost * (t.weight / total_w), 2)
-            writes[(t.row_excel, t.transport_col_excel)] = share
+        first = min(items, key=lambda t: t.row_excel)
+        writes[(first.row_excel, first.transport_col_excel)] = round(cost, 2)
         if len(items) > 1:
+            skipped = sorted(t.row_excel for t in items if t.row_excel != first.row_excel)
             notes.append(
-                f"AWB {awb}: {len(items)} строк(и), общий вес {total_w:g}, "
-                f"стоимость {cost:g} распределена пропорционально весам.",
+                f"AWB {awb}: {len(items)} строк(и) с одинаковым номером — "
+                f"транспорт {cost:g} только в строку {first.row_excel}"
+                + (f" (пропуск: {', '.join(map(str, skipped))})" if skipped else "")
+                + ".",
             )
     return writes, missing, notes
 

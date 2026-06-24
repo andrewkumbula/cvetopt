@@ -137,6 +137,7 @@
       <em>git-репозиторий не инициализирован</em>
     {% endif %}
     &nbsp;|&nbsp; <span id="state" class="badge">проверяю состояние…</span>
+    &nbsp; <a id="resume-job" href="#" hidden style="font-weight:600;">↩ Вернуться к текущему прогону</a>
   </p>
 
   <div class="tabs" role="tablist" aria-label="Разделы">
@@ -430,6 +431,7 @@
 
   <script>
     const stateEl = document.getElementById("state");
+    const resumeLink = document.getElementById("resume-job");
     const updateBtn = document.getElementById("update-btn");
     const updateMsg = document.getElementById("update-msg");
     const jobBtns = document.querySelectorAll("[data-job-btn]");

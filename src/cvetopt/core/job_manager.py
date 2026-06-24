@@ -143,6 +143,17 @@ class JobManager:
             j.status in (JobStatus.pending, JobStatus.running) for j in self._jobs.values()
         )
 
+    def active_job_id(self) -> str | None:
+        """Id самого свежего идущего прогона — чтобы вернуться к нему с главной."""
+        active = [
+            j
+            for j in self._jobs.values()
+            if j.status in (JobStatus.pending, JobStatus.running)
+        ]
+        if not active:
+            return None
+        return max(active, key=lambda j: j.created_at).id
+
     def list_recent(self, limit: int = 10) -> list[JobState]:
         items = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
         return items[:limit]

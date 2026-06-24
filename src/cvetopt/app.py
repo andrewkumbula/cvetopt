@@ -99,6 +99,7 @@ async def api_state() -> JSONResponse:
     return JSONResponse(
         {
             "active_job": job_manager.has_active_job(),
+            "active_job_id": job_manager.active_job_id(),
             "recent": [
                 {"id": j.id, "portal_id": j.portal_id, "status": j.status.value}
                 for j in job_manager.list_recent(5)
