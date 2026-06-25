@@ -132,7 +132,7 @@ def _write_block_xlwt(
     for i, fr in enumerate(rows[:cap]):
         r = r_first + i
         ws.write(r, cw, fr.weight)
-        ws.write(r, ca, fr.awb.strip())
+        ws.write(r, ca, _format_awb_for_excel(fr.awb))
         ws.write(r, cp, fr.price)
         written += 1
     skipped = max(0, len(rows) - cap)
@@ -222,7 +222,45 @@ class TransportTarget:
 
 
 def _digits_only(s: Any) -> str:
+    if isinstance(s, float) and s == int(s):
+        return str(int(s))
     return re.sub(r"\D+", "", str(s or ""))
+
+
+def _format_awb_for_excel(awb: str) -> str:
+    """AWB в Excel как текст с ведущими нулями (префикс 074… и т.п.)."""
+    d = _digits_only(awb)
+    if not d:
+        return awb.strip()
+    if len(d) <= 11:
+        return d.zfill(11)
+    return d
+
+
+def _awb_match_keys(digits: str) -> frozenset[str]:
+    """Набор ключей для сопоставления AWB: Excel часто съедает ведущий 0 (074… → 74…)."""
+    d = _digits_only(digits)
+    if not d:
+        return frozenset()
+    keys: set[str] = {d, d.lstrip("0") or "0"}
+    if len(d) >= 2:
+        keys.add(d[:-1])
+        keys.add((d.lstrip("0") or "0")[:-1] if len(d.lstrip("0") or "0") >= 2 else "")
+    for width in (10, 11, 12):
+        if len(d) <= width:
+            keys.add(d.zfill(width))
+        stripped = d.lstrip("0") or "0"
+        if len(stripped) <= width:
+            keys.add(stripped.zfill(width))
+        if len(d) > width:
+            keys.add(d[-width:])
+    keys.discard("")
+    return frozenset(keys)
+
+
+def _awb_variants(digits: str) -> list[str]:
+    """Совместимость: все варианты ключей AWB для поиска."""
+    return sorted(_awb_match_keys(digits), key=len, reverse=True)
 
 
 def _read_transport_targets(
@@ -263,26 +301,13 @@ def _read_transport_targets(
     return out
 
 
-def _awb_variants(digits: str) -> list[str]:
-    """AWB бывает 11-значным (без check) или 12-значным (с check-digit на конце).
-    Возвращаем варианты для устойчивого матчинга."""
-    d = digits or ""
-    variants = {d}
-    if len(d) >= 4:
-        variants.add(d[:-1])  # без check-digit
-    return [v for v in variants if v]
-
-
 def _lookup_awb_cost(awb: str, awb_to_cost: dict[str, float]) -> tuple[str | None, float | None]:
-    """Ищет cost: пробует AWB как есть и без check-digit, и со стороны словаря тоже."""
-    # 1. Прямые/обрезанные ключи targets vs словарь как есть.
-    for key in _awb_variants(awb):
-        if key in awb_to_cost:
-            return key, awb_to_cost[key]
-    # 2. Словарь может содержать «без check» — попробуем обрезать ключи словаря.
-    short = awb[:-1] if len(awb) >= 12 else awb  # 12 → 11
+    """Ищет cost: учитывает ведущие нули, check-digit и Excel-числа без нуля."""
+    want = _awb_match_keys(awb)
+    if not want:
+        return None, None
     for k, v in awb_to_cost.items():
-        if k == short or k[:-1] == awb or k == awb[:-1]:
+        if _awb_match_keys(k) & want:
             return k, v
     return None, None
 
@@ -311,7 +336,10 @@ def compute_transport_writes(
             missing.append(awb)
             continue
         if matched_key and matched_key != awb:
-            notes.append(f"AWB {awb}: сопоставлен с del-mir ключом {matched_key} (без check-digit).")
+            notes.append(
+                f"AWB {awb}: сопоставлен с del-mir {matched_key}"
+                f"{' (ведущий 0 / check-digit)' if _awb_match_keys(awb) != _awb_match_keys(matched_key) else ''}.",
+            )
         if not items:
             continue
         first = min(items, key=lambda t: t.row_excel)
@@ -448,7 +476,9 @@ def _write_block_xlwings(
     for i, fr in enumerate(rows[:cap]):
         r = r_first + i
         sheet.range((r, cw)).value = fr.weight
-        sheet.range((r, ca)).value = fr.awb.strip()
+        awb_cell = sheet.range((r, ca))
+        awb_cell.api.NumberFormat = "@"
+        awb_cell.value = _format_awb_for_excel(fr.awb)
         sheet.range((r, cp)).value = fr.price
         written += 1
     skipped = max(0, len(rows) - cap)
