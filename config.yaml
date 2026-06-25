@@ -79,10 +79,11 @@ auto1_pipeline:
   backup_before_run: true
   backup_suffix: ".bak"
 
-# Эквадор: BiFlorica xlsx → «Эквадор …xlsm» (отдельная кнопка; пути — в UI «Настройки»).
+# Эквадор: BiFlorica xlsx → «Эквадор …xlsm» (автоматически после Biflorica; пути — в UI «Настройки»).
 ecuador_create:
   enabled: true
-  auto_after_biflorica: false
+  # После скачивания BiFlorica-*.xlsx — автоматически «Эквадор …xlsm» (отдельная кнопка не нужна).
+  auto_after_biflorica: true
   use_create_file_macro: false
   archive_previous_on_create: true
 

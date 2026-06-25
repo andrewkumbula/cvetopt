@@ -148,23 +148,11 @@
   <section id="panel-run" class="tab-panel" role="tabpanel" aria-labelledby="tab-run">
     <div class="row">
       <form method="post" action="/run/biflorica" data-job-form id="biflorica-form" class="job-form">
-        <button type="submit" data-job-btn>Скачать отчёты (Biflorica)</button>
-      </form>
-    </div>
-
-    <div class="row">
-      <form method="post" action="/run/mail-attachments" data-job-form id="mail-form" class="job-form">
-        <button type="submit" data-job-btn>Скачать вложения из почты</button>
-      </form>
-    </div>
-
-    <div class="row">
-      <form method="post" action="/run/ecuador-create" data-job-form id="ecuador-create-form" class="job-form">
-        <button type="submit" data-job-btn>Эквадор: создать файл (тест)</button>
+        <button type="submit" data-job-btn>Скачать отчёты (Biflorica + Эквадор)</button>
       </form>
       <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        Windows + Excel. Берёт последний <code>BiFlorica-*.xlsx</code> из папки скачивания,
-        шаблон и папки — в <strong>Настройки</strong>. Старые <code>Эквадор *.xlsm</code> уходят в архив.
+        После скачивания <code>BiFlorica-*.xlsx</code> автоматически создаётся файл Эквадора (Windows + Excel).
+        Шаблон и папки — в <strong>Настройки</strong>.
       </p>
     </div>
 
@@ -175,24 +163,40 @@
     </div>
 
     <div class="row">
-      <form method="post" action="/run/auto1-pipeline" data-job-form id="auto1-pipeline-form" class="job-form">
-        <button type="submit" data-job-btn>Auto1: Scan → Import → Calculate → Sort → для склада</button>
+      <form method="post" action="/run/holland-full-cycle" data-job-form id="holland-full-cycle-form" class="job-form">
+        <button type="submit" data-job-btn>Голландия: почта → auto1 → перевод</button>
       </form>
       <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        Windows + Excel. Инвойс в <code>C:\Invoice\1</code>, цены — один файл в <code>C:\Invoice\1\2</code>.
+        Windows + Excel. Шаг 1 — вложения Enigma в папки почты (в <strong>Настройки</strong> укажите
+        <code>C:\Invoice\1</code> и <code>C:\Invoice\1\2</code>).
+        Шаг 2 — Scan → Import → Calculate → Sort → для склада.
+        Шаг 3 — перевод Description по словарю, маркеры A–B.
       </p>
     </div>
 
-    <div class="row">
-      <form method="post" action="/run/holland-translate" data-job-form id="holland-translate-form" class="job-form">
-        <button type="submit" data-job-btn>Перевод</button>
-      </form>
-      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        Пути — в <strong>Настройки</strong> (словарь и папка <code>Голландия_1_*.xlsx</code>).
-        Без перевода — Description дописывается в <code>Словарь.xls</code> (кол. B, C пустая).
-        После auto1 — слева <strong>A–B</strong> красный/зелёный квадрат (как Эквадор), файл <code>.xlsm</code>.
-      </p>
-    </div>
+    <details class="advanced-jobs" style="margin-top:1.25rem;">
+      <summary class="muted" style="cursor:pointer;">Отдельные шаги (без цепочки)</summary>
+      <div class="row" style="margin-top:0.75rem;">
+        <form method="post" action="/run/mail-attachments" data-job-form id="mail-form" class="job-form">
+          <button type="submit" data-job-btn>Скачать вложения из почты</button>
+        </form>
+      </div>
+      <div class="row">
+        <form method="post" action="/run/auto1-pipeline" data-job-form id="auto1-pipeline-form" class="job-form">
+          <button type="submit" data-job-btn>Auto1: Scan → … → для склада</button>
+        </form>
+      </div>
+      <div class="row">
+        <form method="post" action="/run/holland-translate" data-job-form id="holland-translate-form" class="job-form">
+          <button type="submit" data-job-btn>Перевод (только)</button>
+        </form>
+      </div>
+      <div class="row">
+        <form method="post" action="/run/ecuador-create" data-job-form id="ecuador-create-form" class="job-form">
+          <button type="submit" data-job-btn>Эквадор: создать файл (без Biflorica)</button>
+        </form>
+      </div>
+    </details>
   </section>
 
   <section id="panel-settings" class="tab-panel hidden" role="tabpanel" aria-labelledby="tab-settings">
@@ -417,8 +421,9 @@
       Отчёты Biflorica — в папку скачивания. Перед прогоном в архив уходят «лишние» xlsx;
       при скачивании нового отчёта старые <code>BiFlorica-*.xlsx</code> переносятся в архив.
       Архив по умолчанию: <code>C:\Инвойсы склад\архив</code> (настраивается выше).
-      Эквадор: кнопка <strong>«Эквадор: создать файл (тест)»</strong> на вкладке Запуск
-      (автоматически после Biflorica сейчас выключено — <code>ecuador_create.auto_after_biflorica: false</code>).
+      Эквадор: после кнопки <strong>«Biflorica + Эквадор»</strong> файл создаётся автоматически
+      (<code>ecuador_create.auto_after_biflorica: true</code>).
+      Отдельный шаг — в <strong>Отдельные шаги</strong> на вкладке Запуск.
     </p>
   </section>
 

@@ -31,6 +31,7 @@ from cvetopt.core.settings import EnvSettings, SelectionOverride
 from cvetopt.core.testing_reset import reset_testing_state
 from cvetopt.scrapers.auto1_pipeline import run_auto1_pipeline_job
 from cvetopt.scrapers.ecuador_create_job import run_ecuador_create_job
+from cvetopt.scrapers.holland_full_cycle import run_holland_full_cycle_job
 from cvetopt.scrapers.holland_translate import run_holland_translate_job
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
@@ -348,6 +349,37 @@ async def run_balance_auto(
         )
 
     job_manager.schedule(job.id, _chain())
+    return RedirectResponse(url=f"/job/{job.id}", status_code=303)
+
+
+@app.post("/run/holland-full-cycle")
+async def run_holland_full_cycle_route(
+    request: Request,
+    lookback_days: int | None = None,
+):
+    """Почта → auto1 → перевод (одна цепочка для Голландии)."""
+    busy = _reject_if_busy()
+    if busy is not None:
+        return busy
+    env = EnvSettings()
+    runtime_settings = load_runtime_settings(env)
+    effective_lookback = (
+        lookback_days if lookback_days is not None else runtime_settings.mail_lookback_days
+    )
+    if effective_lookback < 1 or effective_lookback > 365:
+        return JSONResponse(
+            {"error": "Период почты должен быть в диапазоне 1..365 дней."},
+            status_code=422,
+        )
+    job = job_manager.create_job(f"holland_full_cycle:{effective_lookback}d")
+    job_manager.schedule(
+        job.id,
+        run_holland_full_cycle_job(
+            job.id,
+            env,
+            mail_lookback_days_override=effective_lookback,
+        ),
+    )
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
