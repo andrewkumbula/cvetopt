@@ -8,7 +8,7 @@ selection:
 playwright:
   headless: true
   slow_mo_ms: 0
-  navigation_timeout_ms: 60000
+  navigation_timeout_ms: 90000
 
 portals:
   biflorica:

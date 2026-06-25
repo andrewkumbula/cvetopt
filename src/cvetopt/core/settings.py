@@ -306,6 +306,8 @@ class EnvSettings(BaseSettings):
     log_level: str = "INFO"
 
     playwright_headless: bool = True
+    # Перекрывает config.yaml playwright.navigation_timeout_ms (мс), 0 = из yaml.
+    playwright_navigation_timeout_ms: int = 0
 
     @property
     def project_root(self) -> Path:
@@ -318,4 +320,6 @@ class EnvSettings(BaseSettings):
 def merged_playwright(env: EnvSettings, yaml_cfg: AppYamlConfig) -> PlaywrightConfig:
     pw = yaml_cfg.playwright.model_copy()
     pw.headless = env.playwright_headless
+    if env.playwright_navigation_timeout_ms > 0:
+        pw.navigation_timeout_ms = env.playwright_navigation_timeout_ms
     return pw

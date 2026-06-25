@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
@@ -24,6 +25,85 @@ LogFn = Callable[[str], Awaitable[None]]
 _IMP = re.compile(r"\b(IMP-?\d{3,})\b", re.I)
 _DATE_DOT = re.compile(r"\b(\d{2})[.\-/](\d{2})[.\-/](\d{2,4})\b")
 _ISO_DATE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+_GOTO_RETRIES = 3
+_GOTO_RETRY_DELAY_MS = 5_000
+_DEFAULT_NAV_TIMEOUT_MS = 90_000
+
+
+def _page_nav_timeout_ms(page: Page) -> int:
+    return int(getattr(page, "_cvetopt_nav_timeout_ms", _DEFAULT_NAV_TIMEOUT_MS))
+
+
+def _playwright_proxy() -> dict | None:
+    server = (
+        os.getenv("PLAYWRIGHT_PROXY", "").strip()
+        or os.getenv("HTTPS_PROXY", "").strip()
+        or os.getenv("HTTP_PROXY", "").strip()
+    )
+    if not server:
+        return None
+    proxy: dict[str, str] = {"server": server}
+    user = os.getenv("PLAYWRIGHT_PROXY_USERNAME", "").strip()
+    pwd = os.getenv("PLAYWRIGHT_PROXY_PASSWORD", "").strip()
+    if user:
+        proxy["username"] = user
+        proxy["password"] = pwd
+    return proxy
+
+
+def _is_retryable_goto_error(exc: BaseException) -> bool:
+    msg = str(exc).casefold()
+    return any(
+        token in msg
+        for token in (
+            "err_timed_out",
+            "err_connection",
+            "err_name_not_resolved",
+            "etimedout",
+            "timeout",
+            "net::",
+        )
+    )
+
+
+async def _goto_resilient(
+    page: Page,
+    url: str,
+    log: LogFn,
+    *,
+    timeout_ms: int | None = None,
+    wait_until: str | None = None,
+    retries: int = _GOTO_RETRIES,
+) -> None:
+    """page.goto с повторами. SPA del-mir: сначала commit (curl может отвечать 200, а domcontentloaded — висеть)."""
+    nav_timeout = timeout_ms or _page_nav_timeout_ms(page)
+    modes = (wait_until,) if wait_until else ("commit", "domcontentloaded")
+    last_err: BaseException | None = None
+    for attempt in range(1, retries + 1):
+        if attempt > 1:
+            await log(f"Повтор открытия {url} (попытка {attempt}/{retries})…")
+        for mode in modes:
+            try:
+                await page.goto(url, wait_until=mode, timeout=nav_timeout)
+                return
+            except Exception as e:
+                last_err = e
+                await log(f"goto ({mode}): {e!s:.200}")
+        if attempt < retries and last_err and _is_retryable_goto_error(last_err):
+            await log(f"Жду {_GOTO_RETRY_DELAY_MS // 1000} с перед повтором…")
+            await page.wait_for_timeout(_GOTO_RETRY_DELAY_MS)
+            continue
+        break
+    host = _url_host(url) or url
+    await log(
+        f"Не удалось открыть {url} через Chromium. "
+        f"curl к {host} может отвечать 200, а браузер — зависать на загрузке JS. "
+        f"Проверьте: uv run playwright install chromium; "
+        f"PLAYWRIGHT_HEADLESS=false для отладки; PLAYWRIGHT_NAVIGATION_TIMEOUT_MS=120000."
+    )
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError(f"Не удалось открыть {url}")
 
 
 def _url_host(url: str) -> str:
@@ -114,7 +194,12 @@ async def _clear_delmir_session(
     except Exception as e:
         await log(f"clear_cookies: {e}")
     try:
-        await page.goto(site_origin.rstrip("/") + "/", wait_until="domcontentloaded", timeout=20_000)
+        await _goto_resilient(
+            page,
+            site_origin.rstrip("/") + "/",
+            log,
+            timeout_ms=20_000,
+        )
         await page.evaluate(
             """() => {
                 try { localStorage.clear(); } catch (_) {}
@@ -153,7 +238,7 @@ async def _login(
 
     suffix = " (повторный вход — старая сессия не валидна)" if force else ""
     await log(f"Открываю {cfg.login_url} (email={email!r}){suffix}")
-    await page.goto(cfg.login_url, wait_until="domcontentloaded")
+    await _goto_resilient(page, cfg.login_url, log)
     try:
         await page.wait_for_load_state("load", timeout=12_000)
     except Exception:
@@ -368,7 +453,7 @@ async def _open_balance_or_relogin(
     открывает /personal/balance. Кидает RuntimeError, если и после повторного входа /login.
     """
     sel = cfg.selectors
-    await page.goto(cfg.balance_url, wait_until="domcontentloaded")
+    await _goto_resilient(page, cfg.balance_url, log)
     try:
         await page.wait_for_load_state("load", timeout=15_000)
     except Exception:
@@ -385,7 +470,7 @@ async def _open_balance_or_relogin(
             except Exception as e:
                 await log(f"Не удалось очистить старую сессию: {e}")
         await _login(page, cfg, env, log, force=True, sess_path=sess_path)
-        await page.goto(cfg.balance_url, wait_until="domcontentloaded")
+        await _goto_resilient(page, cfg.balance_url, log)
         try:
             await page.wait_for_load_state("load", timeout=15_000)
         except Exception:
@@ -541,7 +626,7 @@ def _pick_final_amount(siblings: list[str]) -> float:
 
 async def _scrape_detail(page: Page, cfg: DelmirConfig, url: str, log: LogFn) -> tuple[str | None, float | None]:
     sel = cfg.selectors
-    await page.goto(url, wait_until="domcontentloaded")
+    await _goto_resilient(page, url, log)
     try:
         await page.wait_for_load_state("load", timeout=15_000)
     except Exception:
@@ -655,10 +740,21 @@ async def run_delmir_transport_job(
     today = date.today()
 
     async with async_playwright() as p:
-        browser: Browser = await p.chromium.launch(
-            headless=pw_cfg.headless,
-            slow_mo=pw_cfg.slow_mo_ms or None,
-        )
+        launch_kwargs: dict = {
+            "headless": pw_cfg.headless,
+            "slow_mo": pw_cfg.slow_mo_ms or None,
+            "args": [
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--disable-background-networking",
+            ],
+        }
+        proxy = _playwright_proxy()
+        if proxy:
+            launch_kwargs["proxy"] = proxy
+            await lg(f"Playwright proxy: {proxy['server']}")
+        await lg(f"del-mir: запуск Chromium (headless={pw_cfg.headless})…")
+        browser: Browser = await p.chromium.launch(**launch_kwargs)
         context_opts: dict = {
             "viewport": {"width": 1400, "height": 900},
         }
@@ -666,8 +762,12 @@ async def run_delmir_transport_job(
         if sess_path.exists():
             context_opts["storage_state"] = str(sess_path)
         context = await browser.new_context(**context_opts)
-        context.set_default_navigation_timeout(pw_cfg.navigation_timeout_ms)
+        nav_timeout = max(pw_cfg.navigation_timeout_ms, _DEFAULT_NAV_TIMEOUT_MS)
+        context.set_default_navigation_timeout(nav_timeout)
+        context.set_default_timeout(nav_timeout)
         page = await context.new_page()
+        page._cvetopt_nav_timeout_ms = nav_timeout  # noqa: SLF001
+        await lg(f"del-mir: таймаут навигации {nav_timeout} мс")
 
         async def _on_relogin() -> None:
             await _clear_delmir_session(page, sess_path, lg, site_origin=cfg.site_origin)
