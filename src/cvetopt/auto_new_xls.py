@@ -355,6 +355,34 @@ def compute_transport_writes(
     return writes, missing, notes
 
 
+def _weight_col_excel_for_row(cfg: BalanceAutoConfig, row_excel: int) -> int | None:
+    for block in (cfg.ecuador, cfg.colombia):
+        if block.first_data_row_excel <= row_excel <= block.last_data_row_excel:
+            return excel_col_letters_to_index(block.weight_col) + 1
+    return None
+
+
+def _match_transport_cell_format_xlwings(
+    sheet: Any,
+    row: int,
+    col: int,
+    ref_col: int,
+) -> None:
+    """Шрифт/формат как в «Вес» — в шаблоне M часто крупнее остальных колонок."""
+    try:
+        ref = sheet.range((row, ref_col))
+        dst = sheet.range((row, col))
+        ref_font = ref.api.Font
+        dst_font = dst.api.Font
+        dst_font.Size = ref_font.Size
+        dst_font.Name = ref_font.Name
+        dst_font.Bold = ref_font.Bold
+        dst_font.Italic = ref_font.Italic
+        dst.api.NumberFormat = ref.api.NumberFormat
+    except Exception:
+        pass
+
+
 def _apply_transport_writes_xlwt(
     path: Path,
     cfg: BalanceAutoConfig,
@@ -366,7 +394,16 @@ def _apply_transport_writes_xlwt(
     wb = xlutils_copy(rb)
     ws = wb.get_sheet(sheet_idx)
     for (r_excel, c_excel), val in writes.items():
-        ws.write(r_excel - 1, c_excel - 1, val)
+        r0, c0 = r_excel - 1, c_excel - 1
+        wcol = _weight_col_excel_for_row(cfg, r_excel)
+        if wcol:
+            try:
+                xf_idx = sh.cell(r0, wcol - 1).xf_index
+                ws.write(r0, c0, val, rb.format_map[xf_idx])
+            except Exception:
+                ws.write(r0, c0, val)
+        else:
+            ws.write(r0, c0, val)
     wb.save(str(path))
     return len(writes)
 
@@ -386,6 +423,9 @@ def _apply_transport_writes_xlwings(
         sht = wb.sheets[cfg.sheet_name]
         for (r_excel, c_excel), val in writes.items():
             sht.range((r_excel, c_excel)).value = val
+            wcol = _weight_col_excel_for_row(cfg, r_excel)
+            if wcol:
+                _match_transport_cell_format_xlwings(sht, r_excel, c_excel, wcol)
         wb.save()
         return len(writes)
     finally:
