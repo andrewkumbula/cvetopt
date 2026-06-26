@@ -1,38 +1,58 @@
 @echo off
-REM Сборка cvetopt.exe в корне проекта. Запуск: двойной клик или из cmd.
+REM Build cvetopt.exe in project root. Double-click or run from cmd.
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-if not exist "scripts\build-launcher-exe.ps1" (
-  echo [cvetopt] Не найден scripts\build-launcher-exe.ps1
-  echo Сначала обновите проект: git pull  ^(или кнопка «Обновить программу»^)
-  pause
-  exit /b 1
-)
-
 if not exist "launcher\cvetopt_app.py" (
-  echo [cvetopt] Не найден launcher\cvetopt_app.py — нужен git pull с последней версией.
+  echo [cvetopt] Missing launcher\cvetopt_app.py - run: git pull
   pause
   exit /b 1
 )
 
-echo [cvetopt] Папка: %CD%
-echo [cvetopt] Сборка cvetopt.exe …
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build-launcher-exe.ps1"
-set "EC=%ERRORLEVEL%"
-if %EC% NEQ 0 (
-  echo [cvetopt] Ошибка сборки, код %EC%
-  pause
-  exit /b %EC%
+set "UV_CMD=uv"
+where uv >nul 2>nul
+if errorlevel 1 (
+  where python >nul 2>nul
+  if errorlevel 1 (
+    echo [cvetopt] Need uv or python in PATH
+    pause
+    exit /b 1
+  )
+  set "UV_CMD=python -m uv"
 )
 
-if exist "%~dp0cvetopt.exe" (
+if exist "cvetopt.exe" del /f "cvetopt.exe"
+
+if not exist "build\launcher" mkdir "build\launcher"
+
+echo [cvetopt] Folder: %CD%
+echo [cvetopt] Building cvetopt.exe with PyInstaller...
+echo.
+
+%UV_CMD% run --with pyinstaller pyinstaller ^
+  --onefile ^
+  --noconsole ^
+  --name cvetopt ^
+  --distpath "%CD%" ^
+  --workpath "%CD%\build\launcher" ^
+  --specpath "%CD%\build\launcher" ^
+  --clean ^
+  "%CD%\launcher\cvetopt_app.py"
+
+if errorlevel 1 (
   echo.
-  echo [cvetopt] Готово: %~dp0cvetopt.exe
-) else (
-  echo [cvetopt] cvetopt.exe не появился — см. сообщения выше.
+  echo [cvetopt] Build failed.
   pause
   exit /b 1
 )
 
+if not exist "cvetopt.exe" (
+  echo [cvetopt] cvetopt.exe was not created.
+  pause
+  exit /b 1
+)
+
+echo.
+echo [cvetopt] OK: %CD%\cvetopt.exe
+echo [cvetopt] Desktop shortcut: scripts\create-desktop-shortcut.ps1
 pause

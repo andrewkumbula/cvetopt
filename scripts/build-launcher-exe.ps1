@@ -1,5 +1,5 @@
-# Сборка cvetopt.exe (лаунчер Windows-приложения).
-# Запуск на сервере: powershell -ExecutionPolicy Bypass -File scripts\build-launcher-exe.ps1
+# Build cvetopt.exe (Windows app launcher).
+# Run: powershell -ExecutionPolicy Bypass -File scripts\build-launcher-exe.ps1
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 )
@@ -9,7 +9,7 @@ Set-Location $ProjectRoot
 
 $launcherPy = Join-Path $ProjectRoot "launcher\cvetopt_app.py"
 if (-not (Test-Path $launcherPy)) {
-    Write-Error "Не найден $launcherPy"
+    Write-Error "Missing $launcherPy"
 }
 
 $buildDir = Join-Path $ProjectRoot "build\launcher"
@@ -18,7 +18,7 @@ if (Test-Path $oldExe) {
     Remove-Item -Force $oldExe
 }
 
-Write-Host "==> Сборка cvetopt.exe (PyInstaller, один файл, без консоли)…"
+Write-Host "==> Building cvetopt.exe (PyInstaller, onefile, noconsole)..."
 uv run --with pyinstaller pyinstaller `
     --onefile `
     --noconsole `
@@ -30,9 +30,9 @@ uv run --with pyinstaller pyinstaller `
     $launcherPy
 
 if (-not (Test-Path $oldExe)) {
-    Write-Error "Сборка не создала cvetopt.exe"
+    Write-Error "Build did not create cvetopt.exe"
 }
 
 Write-Host ""
-Write-Host "Готово: $oldExe"
-Write-Host "Ярлык на рабочий стол: powershell -ExecutionPolicy Bypass -File scripts\create-desktop-shortcut.ps1"
+Write-Host "OK: $oldExe"
+Write-Host "Shortcut: powershell -ExecutionPolicy Bypass -File scripts\create-desktop-shortcut.ps1"
