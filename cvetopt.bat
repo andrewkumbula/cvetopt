@@ -33,7 +33,10 @@ if errorlevel 1 (
 )
 
 REM Открываем браузер один раз через 3 секунды (uvicorn ещё стартует).
-start "" /b cmd /c "timeout /t 3 /nobreak >nul & start "" http://127.0.0.1:8000/"
+REM Лаунчер cvetopt-launcher.vbs сам открывает окно — не дублируем.
+if not "%CVETOPT_NO_BROWSER%"=="1" (
+  start "" /b cmd /c "timeout /t 3 /nobreak >nul & start "" http://127.0.0.1:8000/"
+)
 
 :loop
 echo.
