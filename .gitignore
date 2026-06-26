@@ -19,6 +19,8 @@ logs/
 Auto_new.xls
 .DS_Store
 dist/
+build/launcher/
+cvetopt.exe
 *.egg-info/
 *.webm
 *.mp4

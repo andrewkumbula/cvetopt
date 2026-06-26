@@ -1,9 +1,5 @@
-' cvetopt — как обычное Windows-приложение.
-' 1) Стартует сервер в фоне (без чёрного окна).
-' 2) Открывает окно программы (Edge/Chrome --app).
-' 3) Пока окно открыто — сервер работает.
-' 4) Закрыли окно — сервер останавливается.
-'
+' Запасной лаунчер (если cvetopt.exe ещё не собран). Предпочтительно: cvetopt.exe
+' Сборка: scripts\build-launcher-exe.ps1
 ' Ярлык: wscript.exe "C:\путь\cvetopt\cvetopt-launcher.vbs"
 Option Explicit
 
