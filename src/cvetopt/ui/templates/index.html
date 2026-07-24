@@ -115,6 +115,38 @@
       gap: 0.6rem;
       margin-top: 0.9rem;
     }
+    .help-guide h2 {
+      font-size: 1.15rem;
+      margin: 1.5rem 0 0.6rem 0;
+    }
+    .help-guide h2:first-child {
+      margin-top: 0.5rem;
+    }
+    .help-guide h3 {
+      font-size: 1rem;
+      margin: 1.1rem 0 0.35rem 0;
+    }
+    .help-guide p {
+      margin: 0.25rem 0 0.5rem 0;
+      font-size: 0.95rem;
+    }
+    .help-guide ul {
+      margin: 0.25rem 0 0.75rem 1.2rem;
+      padding: 0;
+      font-size: 0.95rem;
+    }
+    .help-guide li {
+      margin: 0.2rem 0;
+    }
+    .help-guide code {
+      font-size: 0.88em;
+    }
+    .help-guide .help-note {
+      border-left: 3px solid #ccd;
+      padding-left: 0.75rem;
+      margin: 0.75rem 0;
+      color: #444;
+    }
     @media (max-width: 780px) {
       .job-form,
       .settings-grid { grid-template-columns: 1fr; }
@@ -143,6 +175,7 @@
   <div class="tabs" role="tablist" aria-label="Разделы">
     <button id="tab-run" class="tab-btn active" type="button" data-tab-target="panel-run">Запуск</button>
     <button id="tab-settings" class="tab-btn" type="button" data-tab-target="panel-settings">Настройки</button>
+    <button id="tab-help" class="tab-btn" type="button" data-tab-target="panel-help">Инструкция</button>
   </div>
 
   <section id="panel-run" class="tab-panel" role="tabpanel" aria-labelledby="tab-run">
@@ -424,7 +457,107 @@
       Эквадор: после кнопки <strong>«Biflorica + Эквадор»</strong> файл создаётся автоматически
       (<code>ecuador_create.auto_after_biflorica: true</code>).
       Отдельный шаг — в <strong>Отдельные шаги</strong> на вкладке Запуск.
+      Подробное описание кнопок — на вкладке <strong>Инструкция</strong>.
     </p>
+  </section>
+
+  <section id="panel-help" class="tab-panel hidden help-guide" role="tabpanel" aria-labelledby="tab-help">
+    <p class="muted">
+      Ниже — что делает каждая кнопка. Одновременно может идти только один прогон.
+      Пока идёт прогон — остальные кнопки недоступны. Не закрывайте окно программы во время работы.
+    </p>
+
+    <h2>Основные кнопки (вкладка «Запуск»)</h2>
+
+    <h3>1. «Скачать отчёты (Biflorica + Эквадор)»</h3>
+    <p>Цепочка для ветки <strong>Эквадор</strong>.</p>
+    <ul>
+      <li>Входит на Biflorica и скачивает отчёты по сделкам за период из <strong>Настроек</strong> (возраст заказов, дни).</li>
+      <li>Сохраняет файлы <code>BiFlorica-*.xlsx</code> в папку скачивания Biflorica.</li>
+      <li>Старые отчёты уходят в архив.</li>
+      <li>Сразу после скачивания (если включено в config) создаёт файл <code>Эквадор ….xlsm</code> через Excel по шаблону.</li>
+    </ul>
+    <p class="help-note">Нужны: Windows + Excel, логин Biflorica в <code>.env</code>, пути шаблона/выгрузки Эквадора в Настройках.</p>
+
+    <h3>2. «Заполнить Auto_new.xls (перелёты Biflorica + Транспорт трак del-mir)»</h3>
+    <p>Заполняет лист «АВБ перелеты» в книге Auto_new.</p>
+    <ul>
+      <li><strong>Шаг 1:</strong> с баланса Biflorica пишет вес, AWB и стоимость перелёта (Эквадор / Колумбия).</li>
+      <li><strong>Шаг 2</strong> (только если шаг 1 успешен): с del-mir.com подтягивает «Транспорт трак» по AWB.</li>
+      <li>Перед сохранением делается резервная копия <code>Auto_new.xls.bak</code>.</li>
+    </ul>
+    <p class="help-note">Нужны: Excel (или xlwt), логины Biflorica и del-mir, путь к Auto_new в Настройках. Период del-mir — в Настройках.</p>
+
+    <h3>3. «Голландия: почта → auto1 → перевод»</h3>
+    <p>Полный цикл ветки <strong>Голландия</strong> (три шага подряд).</p>
+    <ul>
+      <li><strong>Шаг 1 — почта:</strong> скачивает вложения из писем Enigma (xls/xlsx) в папки почты из Настроек.</li>
+      <li><strong>Шаг 2 — Auto1:</strong> в Excel на листе auto1 жмёт Scan → Import → Calculate → Sort → «для склада»; получается <code>Голландия_1_*.xlsx</code> / <code>.xlsm</code>.</li>
+      <li><strong>Шаг 3 — перевод:</strong> переводит Description по <code>Словарь.xls</code> (колонка B → C), добавляет красный/зелёный квадрат в столбцах A–B.</li>
+    </ul>
+    <p class="help-note">
+      Важно: папки почты в Настройках должны совпадать с тем, что ждёт Auto1 —
+      обычно <code>C:\Invoice\1</code> (инвойсы) и <code>C:\Invoice\1\2</code> (файл цен).
+      Нужны: Windows + Excel, IMAP в <code>.env</code>, словарь и папка склада в Настройках.
+    </p>
+
+    <h2>Отдельные шаги (блок «без цепочки»)</h2>
+    <p class="muted">Для повторного прогона одного куска, если полный цикл уже частично сделан.</p>
+
+    <h3>«Скачать вложения из почты»</h3>
+    <ul>
+      <li>Только шаг 1 Голландии: IMAP → файлы в папки 1 и 2.</li>
+      <li>Auto1 и перевод <strong>не</strong> запускаются.</li>
+    </ul>
+
+    <h3>«Auto1: Scan → … → для склада»</h3>
+    <ul>
+      <li>Только Excel-макросы на листе auto1.</li>
+      <li>Инвойс уже должен лежать в <code>C:\Invoice\1</code>, цены — один файл в <code>C:\Invoice\1\2</code>.</li>
+      <li>Перевод Description после этого <strong>не</strong> делается (если нужен — кнопка «Перевод» или полный цикл).</li>
+    </ul>
+
+    <h3>«Перевод (только)»</h3>
+    <ul>
+      <li>Берёт уже готовый файл <code>Голландия_1_*</code> в папке склада и переводит Description.</li>
+      <li>Почта и Auto1 <strong>не</strong> запускаются.</li>
+      <li>Если перевода нет в словаре — текст дописывается в словарь (колонка B, C пустая).</li>
+    </ul>
+
+    <h3>«Эквадор: создать файл (без Biflorica)»</h3>
+    <ul>
+      <li>Берёт <strong>последний</strong> уже скачанный <code>BiFlorica-*.xlsx</code> и делает <code>Эквадор ….xlsm</code>.</li>
+      <li>Скачивание с Biflorica <strong>не</strong> запускается.</li>
+      <li>Удобно, если отчёт уже есть, а файл Эквадора нужно пересоздать.</li>
+    </ul>
+
+    <h2>Другие кнопки</h2>
+
+    <h3>«🔄 Обновить программу»</h3>
+    <ul>
+      <li>Делает <code>git pull</code>, обновляет зависимости и перезапускает сервер.</li>
+      <li>Нельзя нажимать во время прогона.</li>
+      <li>Сама сборка <code>cvetopt.exe</code> этим не обновляется — exe собирается отдельно (<code>build-cvetopt-exe.bat</code>).</li>
+    </ul>
+
+    <h3>«Сохранить настройки»</h3>
+    <ul>
+      <li>Записывает периоды и пути (Biflorica, почта, Auto_new, словарь, Эквадор и т.д.) в файл настроек.</li>
+      <li>После перезапуска программы эти значения остаются.</li>
+    </ul>
+
+    <h3>«Сбросить для повторного скачивания»</h3>
+    <ul>
+      <li>Очищает реестры «уже скачано» (Biflorica / почта) и по желанию удаляет файлы в папках.</li>
+      <li>Пути в Настройках не меняются. Нужно только для тестов повторного скачивания.</li>
+    </ul>
+
+    <h2>Типичный порядок работы</h2>
+    <ul>
+      <li><strong>Эквадор:</strong> кнопка 1 (Biflorica + Эквадор) → при необходимости кнопка 2 (Auto_new + del-mir).</li>
+      <li><strong>Голландия:</strong> кнопка 3 (почта → auto1 → перевод).</li>
+      <li>Если что-то упало на середине — откройте «Отдельные шаги» и добейте нужный кусок.</li>
+    </ul>
   </section>
 
   <hr style="margin: 2.5rem 0;" />
