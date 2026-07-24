@@ -1,16 +1,12 @@
-# Выдаёт пользователю права на папку cvetopt (и опционально на Invoice/склад).
-# Запуск ОТ АДМИНИСТРАТОРА:
-#   powershell -ExecutionPolicy Bypass -File scripts\grant-user-access.ps1 -User "SERVER\ИмяПользователя"
-#
-# Пример:
-#   powershell -ExecutionPolicy Bypass -File scripts\grant-user-access.ps1 -User "BananaMan\invoice"
+# Grants Modify rights on cvetopt folder (and Invoice/sklad) to a Windows user.
+# Run as Administrator:
+#   powershell -ExecutionPolicy Bypass -File C:\Apps\cvetopt\scripts\grant-user-access.ps1 -User ".\Ilya"
 param(
     [Parameter(Mandatory = $true)]
     [string]$User,
 
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+    [string]$ProjectRoot = "",
 
-    # Доп. папки, куда Excel/почта пишут файлы (подставьте свои, если отличаются).
     [string[]]$ExtraPaths = @(
         "C:\Invoice",
         "C:\Инвойсы склад"
@@ -18,6 +14,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $ProjectRoot) {
+    $scriptDir = $PSScriptRoot
+    if (-not $scriptDir) {
+        $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if (-not $scriptDir) {
+        $scriptDir = "C:\Apps\cvetopt\scripts"
+    }
+    $ProjectRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+}
 
 function Grant-Modify([string]$Path, [string]$Account) {
     if (-not (Test-Path $Path)) {
@@ -41,7 +48,6 @@ foreach ($p in $ExtraPaths) {
     Grant-Modify $p $User
 }
 
-# Ярлык на рабочий стол пользователя (если профиль уже есть).
 $userName = ($User -split '\\')[-1]
 $userDesktop = "C:\Users\$userName\Desktop"
 $exe = Join-Path $ProjectRoot "cvetopt.exe"
@@ -61,7 +67,7 @@ if (Test-Path $userDesktop) {
         Write-Warning "No cvetopt.exe / cvetopt-launcher.vbs - shortcut skipped"
         $shortcut = $null
     }
-    if ($shortcut -ne $null) {
+    if ($null -ne $shortcut) {
         $shortcut.WorkingDirectory = $ProjectRoot
         $shortcut.Description = "cvetopt"
         $shortcut.Save()
@@ -72,5 +78,5 @@ if (Test-Path $userDesktop) {
 }
 
 Write-Host ""
-Write-Host "Done. Ask the user to log off/on, then double-click their Desktop\cvetopt shortcut."
-Write-Host "Do NOT start cvetopt under the admin account while the user works."
+Write-Host "Done. User should start Desktop\cvetopt shortcut under their own account."
+Write-Host "Do NOT keep cvetopt running under the admin account while the user works."
