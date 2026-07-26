@@ -140,31 +140,29 @@ def start_server(root: Path) -> tuple[subprocess.Popen | None, object | None]:
 
 
 def browser_candidates() -> list[Path]:
-    roots = [
-        os.environ.get("ProgramFiles", r"C:\Program Files"),
-        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    """Prefer Edge (more stable --app process) over Chrome."""
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    ordered = [
+        Path(pf) / r"Microsoft\Edge\Application\msedge.exe",
+        Path(pf86) / r"Microsoft\Edge\Application\msedge.exe",
+        Path(pf) / r"Google\Chrome\Application\chrome.exe",
+        Path(pf86) / r"Google\Chrome\Application\chrome.exe",
     ]
-    names = (
-        r"Microsoft\Edge\Application\msedge.exe",
-        r"Google\Chrome\Application\chrome.exe",
-    )
     found: list[Path] = []
     seen: set[str] = set()
-    for base in roots:
-        for name in names:
-            path = Path(base) / name
-            key = str(path).lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            if path.is_file():
-                found.append(path)
+    for path in ordered:
+        key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_file():
+            found.append(path)
     return found
 
 
 def browser_pids_for_profile(profile_marker: str) -> list[int]:
     """PIDs whose command line mentions our Edge/Chrome profile folder."""
-    # Escape single quotes for PowerShell string
     marker = profile_marker.replace("'", "''")
     ps = (
         "Get-CimInstance Win32_Process | "
@@ -179,7 +177,7 @@ def browser_pids_for_profile(profile_marker: str) -> list[int]:
             timeout=45,
             creationflags=CREATE_NO_WINDOW,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except (OSError, subprocess.TimeoutExpired):
         return []
     pids: list[int] = []
     for line in (r.stdout or "").splitlines():
@@ -191,9 +189,12 @@ def browser_pids_for_profile(profile_marker: str) -> list[int]:
 
 def open_app_and_wait(root: Path, url: str) -> None:
     """
-    Start Edge/Chrome --app with a dedicated profile, then wait until those
-    processes exit. Edge's stub process often exits immediately; we must poll
-    by command-line marker or the launcher kills the server right away.
+    Open Edge/Chrome --app, then block until the user finishes.
+
+    Chrome often drops profile processes quickly (merges into main browser),
+    so close-detection alone is unreliable. We:
+    1) try to wait until profile processes disappear (after they appeared),
+    2) always fall back to a MessageBox — OK stops the server.
     """
     profile = root / "data" / "edge-app-profile"
     profile.mkdir(parents=True, exist_ok=True)
@@ -201,54 +202,48 @@ def open_app_and_wait(root: Path, url: str) -> None:
 
     browsers = browser_candidates()
     append_log(root, f"browsers found: {[str(b) for b in browsers]}")
-    if not browsers:
-        append_log(root, "no Edge/Chrome - using start /wait")
-        subprocess.run(
-            ["cmd", "/c", "start", "/wait", "", url],
-            check=False,
+    if browsers:
+        browser = browsers[0]
+        cmd = [
+            str(browser),
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            f"--app={url}",
+        ]
+        append_log(root, f"open app: {' '.join(cmd)}")
+        subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
+    else:
+        append_log(root, "no Edge/Chrome - start URL")
+        subprocess.Popen(
+            ["cmd", "/c", "start", "", url],
             creationflags=CREATE_NO_WINDOW,
         )
-        return
 
-    browser = browsers[0]
-    cmd = [
-        str(browser),
-        f"--user-data-dir={profile}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        f"--app={url}",
-    ]
-    append_log(root, f"open app: {' '.join(cmd)}")
-    subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
-
-    # Wait until browser processes with our profile appear, then until they leave.
-    appeared = False
+    # Give the window a few seconds to appear; optional close-detect.
+    appeared_at: float | None = None
     idle_rounds = 0
-    for tick in range(3600):  # up to ~1 hour (2s * 1800 would be better; use 2s sleep)
+    for tick in range(45):  # ~90 seconds max of polling before MessageBox
         time.sleep(2)
         pids = browser_pids_for_profile(marker)
         if pids:
-            if not appeared:
+            if appeared_at is None:
+                appeared_at = time.time()
                 append_log(root, f"app window processes: {pids}")
-            appeared = True
             idle_rounds = 0
             continue
-        if appeared:
+        if appeared_at is not None and (time.time() - appeared_at) >= 10:
             idle_rounds += 1
-            # Require a couple empty polls so we don't race process restarts.
-            if idle_rounds >= 2:
-                append_log(root, "app window closed")
+            if idle_rounds >= 5:
+                append_log(root, "app window closed (process poll)")
                 return
-        elif tick == 20:
-            # ~40s and still no profile process — ask user to finish manually.
-            append_log(root, "profile process not detected - MessageBox wait")
-            message_box(
-                "Open http://127.0.0.1:8000/ if the app window did not appear.\n\n"
-                "When you finish working in cvetopt, click OK.\n"
-                "The server will stop after OK."
-            )
-            return
-    append_log(root, "app wait timed out")
+
+    append_log(root, "MessageBox wait (OK = stop server)")
+    message_box(
+        "cvetopt is running.\n\n"
+        "Work in the app window.\n"
+        "When finished, click OK — the server will stop."
+    )
 
 
 def stop_server(root: Path, proc: subprocess.Popen | None) -> None:
