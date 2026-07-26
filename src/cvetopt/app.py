@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cvetopt.core.job_manager import job_manager, run_coro_logged
+from cvetopt.core.job_messages import log_file_hint
 from cvetopt.core.models import JobStatus
 from cvetopt.core.logging_setup import configure_logging
 from cvetopt.core.runtime_settings import (
@@ -547,7 +548,11 @@ async def admin_update():
 
 @app.get("/job/{job_id}", response_class=HTMLResponse)
 async def job_page(request: Request, job_id: str) -> HTMLResponse:
-    return _TEMPLATES.TemplateResponse(request, "job.html", {"job_id": job_id})
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "job.html",
+        {"job_id": job_id, "log_file": log_file_hint()},
+    )
 
 
 @app.get("/api/job/{job_id}")

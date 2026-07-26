@@ -10,6 +10,7 @@ from typing import Any
 
 from loguru import logger
 
+from cvetopt.core.job_messages import humanize_error, humanize_ui_line
 from cvetopt.core.models import JobState, JobStatus
 
 
@@ -20,92 +21,9 @@ def _job_log_timestamp() -> str:
     return now.strftime("%Y-%m-%d %H:%M:%S") + f".{ms:03d}"
 
 
-def _is_ui_log_line(line: str) -> bool:
-    """
-    Фильтр для лога в UI:
-    - в файл/консоль пишем ВСЁ,
-    - в интерфейсе показываем только ключевые события для человека.
-    """
-    text = (line or "").strip()
-    low = text.lower()
-    if not text:
-        return False
-
-    noisy_prefixes = (
-        "клик по селектору:",
-        "селектор ",
-        "таблица движений: вариант",
-        "строка заголовка таблицы",
-        "колонки: операция=",
-        "загружена сохранённая сессия",
-    )
-    if low.startswith(noisy_prefixes):
-        return False
-
-    key_markers = (
-        "открываю ",
-        "выполняю вход",
-        "сессия сохранена",
-        "переопределён период",
-        "ожидаемые даты вылета",
-        "всего уникальных заказов",
-        "подходящих imp-записей",
-        "найдено целевых строк",
-        "записано ",
-        "сохранено:",
-        "файл сохранён:",
-        "готово",
-        "ошибка",
-        "пропуск",
-        "не найден",
-        "не удалось",
-        "не создан",
-        "нет данных",
-        "перезапуск",
-        "эквадор",
-        "архив",
-        "в архив перенесено",
-        "папка скачивания",
-        "уже в реестре",
-        "останов",
-        "дубликат",
-        "постобработка",
-        "номер ",
-        "папку 1",
-        "папку 2",
-        "папка 1",
-        "папка 2",
-        "очищены",
-        "price",
-        "auto1",
-        "шаг «",
-        "scan",
-        "import",
-        "calculate",
-        "sort",
-        "application.run",
-        "onaction",
-        "выполняется",
-        "склад",
-        "книга:",
-        "макрос",
-        "excel",
-        "перевод",
-        "словарь",
-        "description",
-        "голландия",
-        "эквадор",
-        "создать файл",
-        "biflorica-",
-    )
-    if any(marker in low for marker in key_markers):
-        return True
-
-    # Сохраняем краткие сводки (например "Страница 3: ... 2")
-    if low.startswith("страница ") and "заказов в диапазоне" in low:
-        return True
-
-    return False
+def _ui_timestamp() -> str:
+    """В UI время без миллисекунд — так лог читается как список шагов."""
+    return datetime.now().strftime("%H:%M:%S")
 
 
 def _kill_excel_processes() -> None:
@@ -180,7 +98,7 @@ class JobManager:
             return False, "Прогон уже завершён."
 
         self._cancel_requested.add(job_id)
-        await self.append_log(job_id, "Запрошена остановка прогона…")
+        await self.append_ui_log(job_id, "Запрошена остановка прогона…")
         _kill_excel_processes()
 
         task = self._tasks.get(job_id)
@@ -192,22 +110,31 @@ class JobManager:
             JobStatus.cancelled,
             error="Остановлено пользователем",
         )
-        await self.append_log(
+        await self.append_ui_log(
             job_id,
             "Прогон остановлен. Если завис Excel — процесс завершён принудительно.",
         )
         return True, "ok"
 
     async def append_log(self, job_id: str, line: str) -> None:
-        stamped = f"{_job_log_timestamp()} | {line}"
-        logger.info("[job {}] {}", job_id, stamped)
+        logger.info("[job {}] {} | {}", job_id, _job_log_timestamp(), line)
+        ui_line = humanize_ui_line(line)
+        if ui_line is None:
+            return
         async with self._lock:
             job = self._jobs.get(job_id)
             if job:
-                if _is_ui_log_line(line):
-                    job.logs.append(stamped)
+                job.logs.append(f"{_ui_timestamp()}  {ui_line}")
                 if len(job.logs) > 2000:
                     job.logs = job.logs[-1500:]
+
+    async def append_ui_log(self, job_id: str, line: str) -> None:
+        """Строка, которая обязана попасть в UI без фильтров (заголовки шагов, итоги)."""
+        logger.info("[job {}] {} | {}", job_id, _job_log_timestamp(), line)
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.logs.append(f"{_ui_timestamp()}  {line}")
 
     async def set_status(
         self,
@@ -242,6 +169,11 @@ async def job_log(job_id: str, msg: str) -> None:
     await job_manager.append_log(job_id, msg)
 
 
+async def job_step(job_id: str, msg: str) -> None:
+    """Заголовок шага для пользователя: всегда виден в UI."""
+    await job_manager.append_ui_log(job_id, msg)
+
+
 async def raise_if_cancelled(job_id: str) -> None:
     """Прерывает прогон, если пользователь нажал «Остановить»."""
     if job_manager.cancel_requested(job_id):
@@ -264,12 +196,13 @@ async def run_coro_logged(
                 JobStatus.cancelled,
                 error="Остановлено пользователем",
             )
-        await job_manager.append_log(job_id, "Прогон прерван.")
+        await job_manager.append_ui_log(job_id, "Прогон прерван.")
         raise
     except Exception as e:
         logger.exception("Job {} failed", job_id)
-        await job_manager.append_log(job_id, f"Ошибка: {e}")
-        await job_manager.set_status(job_id, JobStatus.failed, error=str(e))
+        friendly = humanize_error(f"{type(e).__name__}: {e}")
+        await job_manager.append_ui_log(job_id, f"Ошибка: {friendly}")
+        await job_manager.set_status(job_id, JobStatus.failed, error=friendly)
     else:
         if job_manager.cancel_requested(job_id):
             await job_manager.set_status(

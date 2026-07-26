@@ -15,7 +15,7 @@ from dateutil import parser as date_parser
 from loguru import logger
 from playwright.async_api import Browser, Download, Locator, Page, async_playwright
 
-from cvetopt.core.job_manager import job_log, job_manager, raise_if_cancelled
+from cvetopt.core.job_manager import job_log, job_manager, job_step, raise_if_cancelled
 from cvetopt.core.models import Order
 from cvetopt.core.registry import DownloadRegistry
 from cvetopt.core.runtime_settings import (
@@ -423,6 +423,7 @@ async def run_biflorica_job(
     )
     await job_log(job_id, f"Папка скачивания: {download_dir}")
     await job_log(job_id, f"Уже в реестре заказов: {len(downloaded_ids)}")
+    await job_step(job_id, "Скачиваю отчёты Biflorica…")
 
     pw_cfg = merged_playwright(env, yaml_cfg)
     email = env.biflorica_email
@@ -565,7 +566,7 @@ async def run_biflorica_job(
                     await lg("Эквадор: пропуск (нужен Windows + Excel)")
                 else:
                     await raise_if_cancelled(job_id)
-                    await lg("Эквадор: запуск обработки (Excel)…")
+                    await job_step(job_id, "Эквадор: формирую файл в Excel…")
                     try:
                         from cvetopt.invoice.ecuador_create import (
                             create_ecuador_file_from_biflorica,

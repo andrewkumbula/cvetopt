@@ -36,6 +36,16 @@
     #cancel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     #cancel-msg { font-size: 0.9rem; color: #555; }
     .status-cancelled { color: #b45309; }
+    .err-banner {
+      background: #fff1f1;
+      border: 1px solid #e0a0a0;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin: 0 0 1rem 0;
+      color: #7f1d1d;
+      line-height: 1.45;
+    }
+    .muted-note { font-size: 0.85rem; color: #666; }
   </style>
 </head>
 <body>
@@ -48,9 +58,16 @@
     <button type="button" id="cancel-btn" hidden>Остановить прогон</button>
     <span id="cancel-msg" class="muted"></span>
   </div>
-  <p id="err" class="status" style="color:#b00"></p>
-  <h2>Лог</h2>
+  <div id="err-box" class="err-banner" hidden>
+    <strong>Не получилось.</strong>
+    <span id="err"></span>
+  </div>
+  <h2>Что происходит</h2>
   <pre id="log"></pre>
+  <p class="muted-note">
+    Технические подробности (для разбора ошибок) пишутся в файл
+    <code>{{ log_file }}</code> в папке программы.
+  </p>
   <h2>Файлы</h2>
   <ul class="files" id="files"></ul>
   <script>
@@ -99,7 +116,9 @@
       stEl.textContent = label + " (" + j.status + ")";
       stEl.className = "status" + (j.status === "cancelled" ? " status-cancelled" : "");
 
-      document.getElementById("err").textContent = j.error || "";
+      const failed = j.status === "failed";
+      document.getElementById("err").textContent = failed ? (j.error || "") : "";
+      document.getElementById("err-box").hidden = !failed || !j.error;
       document.getElementById("log").textContent = (j.logs || []).join("\n");
       const ul = document.getElementById("files");
       ul.innerHTML = "";
