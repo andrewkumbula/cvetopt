@@ -162,14 +162,42 @@ def browser_candidates() -> list[Path]:
     return found
 
 
+def browser_pids_for_profile(profile_marker: str) -> list[int]:
+    """PIDs whose command line mentions our Edge/Chrome profile folder."""
+    # Escape single quotes for PowerShell string
+    marker = profile_marker.replace("'", "''")
+    ps = (
+        "Get-CimInstance Win32_Process | "
+        f"Where-Object {{ $_.CommandLine -and $_.CommandLine -like '*{marker}*' }} | "
+        "Select-Object -ExpandProperty ProcessId"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return []
+    pids: list[int] = []
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            pids.append(int(line))
+    return pids
+
+
 def open_app_and_wait(root: Path, url: str) -> None:
     """
-    Dedicated --user-data-dir so Edge/Chrome is a separate process.
-    Without it, --app often returns immediately (shared browser process)
-    and the launcher would kill the server right away.
+    Start Edge/Chrome --app with a dedicated profile, then wait until those
+    processes exit. Edge's stub process often exits immediately; we must poll
+    by command-line marker or the launcher kills the server right away.
     """
     profile = root / "data" / "edge-app-profile"
     profile.mkdir(parents=True, exist_ok=True)
+    marker = "edge-app-profile"
 
     browsers = browser_candidates()
     append_log(root, f"browsers found: {[str(b) for b in browsers]}")
@@ -191,7 +219,31 @@ def open_app_and_wait(root: Path, url: str) -> None:
         f"--app={url}",
     ]
     append_log(root, f"open app: {' '.join(cmd)}")
-    subprocess.run(cmd, check=False)
+    subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
+
+    # Wait until browser processes with our profile appear, then until they leave.
+    appeared = False
+    idle_rounds = 0
+    for tick in range(3600):  # up to ~1 hour (2s * 1800 would be better; use 2s sleep)
+        time.sleep(2)
+        pids = browser_pids_for_profile(marker)
+        if pids:
+            if not appeared:
+                append_log(root, f"app window processes: {pids}")
+            appeared = True
+            idle_rounds = 0
+            continue
+        if appeared:
+            idle_rounds += 1
+            # Require a couple empty polls so we don't race process restarts.
+            if idle_rounds >= 2:
+                append_log(root, "app window closed")
+                return
+        elif tick >= 15:
+            # 30s and still no profile process — fall through to keep server? Better warn.
+            append_log(root, "browser profile process not seen - keep waiting anyway")
+            appeared = True  # avoid infinite "not seen"; wait for close or user kill
+    append_log(root, "app wait timed out")
 
 
 def stop_server(root: Path, proc: subprocess.Popen | None) -> None:
