@@ -239,10 +239,15 @@ def open_app_and_wait(root: Path, url: str) -> None:
             if idle_rounds >= 2:
                 append_log(root, "app window closed")
                 return
-        elif tick >= 15:
-            # 30s and still no profile process — fall through to keep server? Better warn.
-            append_log(root, "browser profile process not seen - keep waiting anyway")
-            appeared = True  # avoid infinite "not seen"; wait for close or user kill
+        elif tick == 20:
+            # ~40s and still no profile process — ask user to finish manually.
+            append_log(root, "profile process not detected - MessageBox wait")
+            message_box(
+                "Open http://127.0.0.1:8000/ if the app window did not appear.\n\n"
+                "When you finish working in cvetopt, click OK.\n"
+                "The server will stop after OK."
+            )
+            return
     append_log(root, "app wait timed out")
 
 
