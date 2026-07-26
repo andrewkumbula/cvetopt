@@ -26,25 +26,8 @@ set "UV_MODE="
 set "UV_CMD="
 set "VENV_PY=%ROOT%.venv\Scripts\python.exe"
 
-where uv >nul 2>nul
-if not errorlevel 1 (
-  set "UV_MODE=uv"
-  set "UV_CMD=uv"
-  echo [cvetopt] mode: uv
-  goto ready
-)
-
-where python >nul 2>nul
-if not errorlevel 1 (
-  python -m uv --version >nul 2>nul
-  if not errorlevel 1 (
-    set "UV_MODE=uv"
-    set "UV_CMD=python -m uv"
-    echo [cvetopt] mode: python -m uv
-    goto ready
-  )
-)
-
+REM Prefer project .venv FIRST - avoid "where uv/python" hanging on bad PATH entries.
+echo [cvetopt] checking .venv ...
 if exist "%VENV_PY%" (
   findstr /I /C:"\Users\" "%ROOT%.venv\pyvenv.cfg" >nul 2>nul
   if not errorlevel 1 (
@@ -57,8 +40,29 @@ if exist "%VENV_PY%" (
     )
   )
   set "UV_MODE=venv"
-  echo [cvetopt] uv/python not in PATH - using .venv
+  echo [cvetopt] mode: venv
   goto ready
+)
+
+echo [cvetopt] no .venv - looking for uv ...
+where uv >nul 2>nul
+if not errorlevel 1 (
+  set "UV_MODE=uv"
+  set "UV_CMD=uv"
+  echo [cvetopt] mode: uv
+  goto ready
+)
+
+echo [cvetopt] looking for python -m uv ...
+where python >nul 2>nul
+if not errorlevel 1 (
+  python -m uv --version >nul 2>nul
+  if not errorlevel 1 (
+    set "UV_MODE=uv"
+    set "UV_CMD=python -m uv"
+    echo [cvetopt] mode: python -m uv
+    goto ready
+  )
 )
 
 echo [cvetopt] Missing uv, python, and .venv\Scripts\python.exe
@@ -67,7 +71,6 @@ if not "%CVETOPT_HIDDEN%"=="1" pause
 exit /b 1
 
 :ready
-REM Disable QuickEdit for this console so a mouse click does not freeze the server.
 reg add "HKCU\Console" /v QuickEdit /t REG_DWORD /d 0 /f >nul 2>nul
 
 set "PYTHONUNBUFFERED=1"
