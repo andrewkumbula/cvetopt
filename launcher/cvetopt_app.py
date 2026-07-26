@@ -53,6 +53,16 @@ def message_box(text: str, *, title: str = "cvetopt", error: bool = False) -> No
         pass
 
 
+def log_tail(path: Path, lines: int = 15) -> str:
+    """Последние строки лога — чтобы показать причину сразу в окне."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "(log not available)"
+    tail = [ln for ln in text.splitlines() if ln.strip()][-lines:]
+    return "\n".join(tail) if tail else "(log is empty)"
+
+
 def is_server_up() -> bool:
     try:
         with urllib.request.urlopen(HEALTH_URL, timeout=2) as response:
@@ -377,10 +387,12 @@ def run() -> int:
                     log_handle.close()
                 except OSError:
                     pass
+            server_log = root / "data" / "launcher-server.log"
             msg = (
-                f"Server did not answer in {START_TIMEOUT_SEC}s.\n\n"
-                f"Log:\n{root / 'data' / 'launcher-server.log'}\n"
-                f"{root / 'data' / 'launcher.log'}"
+                f"Server did not answer in {START_TIMEOUT_SEC}s "
+                f"(server process exit={dead}).\n\n"
+                f"Last lines of {server_log.name}:\n{log_tail(server_log)}\n\n"
+                f"Full logs:\n{server_log}\n{root / 'data' / 'launcher.log'}"
             )
             message_box(msg, error=True)
             return 1
