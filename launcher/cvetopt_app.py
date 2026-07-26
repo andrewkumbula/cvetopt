@@ -72,8 +72,69 @@ def wait_for_server(root: Path) -> bool:
     return False
 
 
+def _uvicorn_cmd(root: Path) -> list[str] | None:
+    venv_py = root / ".venv" / "Scripts" / "python.exe"
+    if not venv_py.is_file():
+        return None
+    return [
+        str(venv_py),
+        "-u",
+        "-m",
+        "uvicorn",
+        "cvetopt.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--app-dir",
+        "src",
+        "--log-level",
+        "info",
+    ]
+
+
+def _do_update_pull(root: Path, log_f: object) -> None:
+    """git pull + sync after admin update (exit code 42)."""
+    import shutil
+
+    def _w(msg: str) -> None:
+        append_log(root, msg)
+        try:
+            log_f.write(msg + "\n")
+            log_f.flush()
+        except OSError:
+            pass
+
+    _w("update: git pull --ff-only")
+    if (root / ".git").is_dir():
+        subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=str(root),
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            creationflags=CREATE_NO_WINDOW,
+            check=False,
+        )
+    uv = shutil.which("uv")
+    if uv:
+        _w("update: uv sync")
+        subprocess.run(
+            [uv, "sync"],
+            cwd=str(root),
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            creationflags=CREATE_NO_WINDOW,
+            check=False,
+        )
+    else:
+        _w("update: uv not in PATH - sync skipped (using existing .venv)")
+
+
 def start_server(root: Path) -> tuple[subprocess.Popen | None, object | None]:
-    """Start uvicorn via .venv python; fall back to cvetopt.bat. Returns (proc, log_handle)."""
+    """
+    Start server. Prefer cvetopt.bat (has exit-42 update loop).
+    Fallback: .venv uvicorn with our own 42-restart watcher.
+    """
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -85,42 +146,11 @@ def start_server(root: Path) -> tuple[subprocess.Popen | None, object | None]:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "launcher-server.log"
     log_f = open(log_path, "w", encoding="utf-8", errors="replace")
-
-    venv_py = root / ".venv" / "Scripts" / "python.exe"
     creation = CREATE_NO_WINDOW if sys.platform == "win32" else 0
-
-    if venv_py.is_file():
-        cmd = [
-            str(venv_py),
-            "-u",
-            "-m",
-            "uvicorn",
-            "cvetopt.app:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "8000",
-            "--app-dir",
-            "src",
-            "--log-level",
-            "info",
-        ]
-        append_log(root, f"start cmd: {' '.join(cmd)}")
-        log_f.write(f"cmd: {' '.join(cmd)}\n")
-        log_f.flush()
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(root),
-            env=env,
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-            creationflags=creation,
-        )
-        append_log(root, f"uvicorn pid={proc.pid}")
-        return proc, log_f
 
     bat = root / "cvetopt.bat"
     if bat.is_file():
+        # Bat owns the update/restart loop (exit code 42).
         append_log(root, f"start bat: {bat}")
         log_f.write(f"bat: {bat}\n")
         log_f.flush()
@@ -132,11 +162,51 @@ def start_server(root: Path) -> tuple[subprocess.Popen | None, object | None]:
             stderr=subprocess.STDOUT,
             creationflags=creation,
         )
+        append_log(root, f"bat pid={proc.pid}")
         return proc, log_f
 
-    log_f.write("no .venv python and no cvetopt.bat\n")
-    log_f.close()
-    return None, None
+    cmd = _uvicorn_cmd(root)
+    if cmd is None:
+        log_f.write("no cvetopt.bat and no .venv python\n")
+        log_f.close()
+        return None, None
+
+    append_log(root, f"start cmd: {' '.join(cmd)}")
+    log_f.write(f"cmd: {' '.join(cmd)}\n")
+    log_f.flush()
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(root),
+        env=env,
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+        creationflags=creation,
+    )
+    append_log(root, f"uvicorn pid={proc.pid}")
+
+    def _watch_exit42() -> None:
+        nonlocal proc
+        while True:
+            code = proc.wait()
+            append_log(root, f"uvicorn exited code={code}")
+            if code != 42:
+                return
+            _do_update_pull(root, log_f)
+            append_log(root, "restarting uvicorn after update")
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(root),
+                env=env,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                creationflags=creation,
+            )
+            append_log(root, f"uvicorn pid={proc.pid}")
+
+    import threading
+
+    threading.Thread(target=_watch_exit42, daemon=True).start()
+    return proc, log_f
 
 
 def browser_candidates() -> list[Path]:
