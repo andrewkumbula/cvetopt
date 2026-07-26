@@ -67,6 +67,12 @@ if not "%CVETOPT_HIDDEN%"=="1" pause
 exit /b 1
 
 :ready
+REM Disable QuickEdit for this console so a mouse click does not freeze the server.
+reg add "HKCU\Console" /v QuickEdit /t REG_DWORD /d 0 /f >nul 2>nul
+
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+
 if not "%CVETOPT_NO_BROWSER%"=="1" (
   start "" /b cmd /c "timeout /t 3 /nobreak >nul & start "" http://127.0.0.1:8000/"
 )
@@ -74,10 +80,12 @@ if not "%CVETOPT_NO_BROWSER%"=="1" (
 :loop
 echo.
 echo [cvetopt] %DATE% %TIME% - starting uvicorn (Ctrl+C to stop)
+echo [cvetopt] mode=%UV_MODE%  open http://127.0.0.1:8000/
+echo [cvetopt] loading Python modules - wait up to 60 sec...
 if "%UV_MODE%"=="venv" (
-  "%VENV_PY%" -m uvicorn cvetopt.app:app --host 127.0.0.1 --port 8000 --app-dir src
+  "%VENV_PY%" -u -m uvicorn cvetopt.app:app --host 127.0.0.1 --port 8000 --app-dir src --log-level info
 ) else (
-  %UV_CMD% run uvicorn cvetopt.app:app --host 127.0.0.1 --port 8000 --app-dir src
+  %UV_CMD% run python -u -m uvicorn cvetopt.app:app --host 127.0.0.1 --port 8000 --app-dir src --log-level info
 )
 set "EXIT_CODE=%ERRORLEVEL%"
 
