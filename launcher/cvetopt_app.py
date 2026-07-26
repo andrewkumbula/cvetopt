@@ -71,11 +71,14 @@ def is_server_up() -> bool:
         return False
 
 
-def wait_for_server(root: Path) -> bool:
+def wait_for_server(root: Path, proc: subprocess.Popen | None = None) -> bool:
     for i in range(START_TIMEOUT_SEC):
         if is_server_up():
             append_log(root, f"server up after {i}s")
             return True
+        if proc is not None and proc.poll() is not None:
+            append_log(root, f"server process died after {i}s code={proc.returncode}")
+            return False
         if i in (5, 15, 30, 60):
             append_log(root, f"waiting for server... {i}s")
         time.sleep(1)
@@ -376,7 +379,7 @@ def run() -> int:
         if owned_proc is None:
             message_box("Could not start server (.venv / cvetopt.bat).", error=True)
             return 1
-        if not wait_for_server(root):
+        if not wait_for_server(root, owned_proc):
             # Capture early crash output
             time.sleep(0.5)
             dead = owned_proc.poll()

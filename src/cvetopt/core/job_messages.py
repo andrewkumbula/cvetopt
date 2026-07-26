@@ -320,7 +320,16 @@ _ERROR_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 
 
 def log_file_hint(on_date: date | None = None) -> str:
+    """Файл журнала за нужный день — тот, куда логи реально пишутся."""
     day = (on_date or date.today()).isoformat()
+    try:
+        from cvetopt.core.logging_setup import active_log_dir, active_log_suffix
+
+        log_dir = active_log_dir()
+        if log_dir is not None:
+            return str(log_dir / f"{day}{active_log_suffix()}.log")
+    except Exception:
+        pass
     return f"data\\logs\\{day}.log"
 
 
