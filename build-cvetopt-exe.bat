@@ -54,5 +54,20 @@ if not exist "cvetopt.exe" (
 
 echo.
 echo [cvetopt] OK: %CD%\cvetopt.exe
+echo [cvetopt] Also building console debug exe...
+
+%UV_CMD% run --with pyinstaller pyinstaller ^
+  --onefile ^
+  --console ^
+  --name cvetopt-debug ^
+  --distpath "%CD%" ^
+  --workpath "%CD%\build\launcher" ^
+  --specpath "%CD%\build\launcher" ^
+  "%CD%\launcher\cvetopt_app.py"
+
+if exist "cvetopt-debug.exe" (
+  echo [cvetopt] OK: %CD%\cvetopt-debug.exe  - run this to see errors in console
+)
+
 echo [cvetopt] Desktop shortcut: scripts\create-desktop-shortcut.ps1
 pause

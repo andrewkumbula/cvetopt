@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -29,12 +30,27 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def append_log(root: Path, text: str) -> None:
+    try:
+        log_dir = root / "data"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "launcher.log", "a", encoding="utf-8", errors="replace") as f:
+            f.write(text)
+            if not text.endswith("\n"):
+                f.write("\n")
+    except OSError:
+        pass
+
+
 def message_box(text: str, *, title: str = "cvetopt", error: bool = False) -> None:
     if sys.platform != "win32":
         print(f"{title}: {text}", file=sys.stderr)
         return
     style = 0x10 if error else 0x30
-    ctypes.windll.user32.MessageBoxW(0, text, title, style)
+    try:
+        ctypes.windll.user32.MessageBoxW(0, text, title, style)
+    except Exception:
+        pass
 
 
 def is_server_up() -> bool:
@@ -45,16 +61,19 @@ def is_server_up() -> bool:
         return False
 
 
-def wait_for_server() -> bool:
-    for _ in range(START_TIMEOUT_SEC):
+def wait_for_server(root: Path) -> bool:
+    for i in range(START_TIMEOUT_SEC):
         if is_server_up():
+            append_log(root, f"server up after {i}s")
             return True
+        if i in (5, 15, 30, 60):
+            append_log(root, f"waiting for server... {i}s")
         time.sleep(1)
     return False
 
 
-def start_server(root: Path) -> subprocess.Popen[bytes] | None:
-    """Start uvicorn via .venv python; fall back to cvetopt.bat."""
+def start_server(root: Path) -> tuple[subprocess.Popen | None, object | None]:
+    """Start uvicorn via .venv python; fall back to cvetopt.bat. Returns (proc, log_handle)."""
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -68,48 +87,56 @@ def start_server(root: Path) -> subprocess.Popen[bytes] | None:
     log_f = open(log_path, "w", encoding="utf-8", errors="replace")
 
     venv_py = root / ".venv" / "Scripts" / "python.exe"
+    creation = CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
     if venv_py.is_file():
-        log_f.write(f"starting: {venv_py}\n")
+        cmd = [
+            str(venv_py),
+            "-u",
+            "-m",
+            "uvicorn",
+            "cvetopt.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
+            "--app-dir",
+            "src",
+            "--log-level",
+            "info",
+        ]
+        append_log(root, f"start cmd: {' '.join(cmd)}")
+        log_f.write(f"cmd: {' '.join(cmd)}\n")
         log_f.flush()
-        return subprocess.Popen(
-            [
-                str(venv_py),
-                "-u",
-                "-m",
-                "uvicorn",
-                "cvetopt.app:app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "8000",
-                "--app-dir",
-                "src",
-                "--log-level",
-                "info",
-            ],
-            cwd=root,
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(root),
             env=env,
             stdout=log_f,
             stderr=subprocess.STDOUT,
-            creationflags=CREATE_NO_WINDOW,
+            creationflags=creation,
         )
+        append_log(root, f"uvicorn pid={proc.pid}")
+        return proc, log_f
 
     bat = root / "cvetopt.bat"
     if bat.is_file():
-        log_f.write(f"starting bat: {bat}\n")
+        append_log(root, f"start bat: {bat}")
+        log_f.write(f"bat: {bat}\n")
         log_f.flush()
-        return subprocess.Popen(
+        proc = subprocess.Popen(
             ["cmd", "/c", str(bat)],
-            cwd=root,
+            cwd=str(root),
             env=env,
             stdout=log_f,
             stderr=subprocess.STDOUT,
-            creationflags=CREATE_NO_WINDOW,
+            creationflags=creation,
         )
+        return proc, log_f
 
     log_f.write("no .venv python and no cvetopt.bat\n")
     log_f.close()
-    return None
+    return None, None
 
 
 def browser_candidates() -> list[Path]:
@@ -144,27 +171,31 @@ def open_app_and_wait(root: Path, url: str) -> None:
     profile = root / "data" / "edge-app-profile"
     profile.mkdir(parents=True, exist_ok=True)
 
-    for browser in browser_candidates():
+    browsers = browser_candidates()
+    append_log(root, f"browsers found: {[str(b) for b in browsers]}")
+    if not browsers:
+        append_log(root, "no Edge/Chrome - using start /wait")
         subprocess.run(
-            [
-                str(browser),
-                f"--user-data-dir={profile}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                f"--app={url}",
-            ],
+            ["cmd", "/c", "start", "/wait", "", url],
             check=False,
+            creationflags=CREATE_NO_WINDOW,
         )
         return
 
-    subprocess.run(
-        ["cmd", "/c", "start", "/wait", "", url],
-        check=False,
-        creationflags=CREATE_NO_WINDOW,
-    )
+    browser = browsers[0]
+    cmd = [
+        str(browser),
+        f"--user-data-dir={profile}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        f"--app={url}",
+    ]
+    append_log(root, f"open app: {' '.join(cmd)}")
+    subprocess.run(cmd, check=False)
 
 
-def stop_server(root: Path, proc: subprocess.Popen[bytes] | None) -> None:
+def stop_server(root: Path, proc: subprocess.Popen | None) -> None:
+    append_log(root, "stopping server...")
     if proc is not None and proc.poll() is None:
         try:
             proc.terminate()
@@ -172,8 +203,8 @@ def stop_server(root: Path, proc: subprocess.Popen[bytes] | None) -> None:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
-        except OSError:
-            pass
+        except OSError as e:
+            append_log(root, f"terminate failed: {e}")
 
     stop_bat = root / "cvetopt-stop.bat"
     if stop_bat.is_file():
@@ -181,51 +212,55 @@ def stop_server(root: Path, proc: subprocess.Popen[bytes] | None) -> None:
         env["CVETOPT_QUIET"] = "1"
         subprocess.run(
             ["cmd", "/c", str(stop_bat)],
-            cwd=root,
+            cwd=str(root),
             env=env,
             creationflags=CREATE_NO_WINDOW,
             check=False,
         )
+    append_log(root, "stop done")
 
 
-def main() -> int:
-    if sys.platform != "win32":
-        message_box("cvetopt is Windows-only.", error=True)
-        return 1
-
+def run() -> int:
     root = project_root()
     os.chdir(root)
+    append_log(root, f"=== launcher start root={root} frozen={getattr(sys, 'frozen', False)}")
 
-    if not (root / ".venv" / "Scripts" / "python.exe").is_file() and not (
-        root / "cvetopt.bat"
-    ).is_file():
-        message_box(
-            f"Missing .venv and cvetopt.bat in:\n{root}",
-            error=True,
-        )
+    venv_py = root / ".venv" / "Scripts" / "python.exe"
+    bat = root / "cvetopt.bat"
+    if not venv_py.is_file() and not bat.is_file():
+        message_box(f"Missing .venv and cvetopt.bat in:\n{root}", error=True)
         return 1
 
-    owned_proc: subprocess.Popen[bytes] | None = None
+    owned_proc: subprocess.Popen | None = None
+    log_handle = None
     started_here = False
 
     if is_server_up():
-        # Reuse existing server; do not kill it on exit (another session may own it).
-        owned_proc = None
+        append_log(root, "server already up - reuse")
         started_here = False
     else:
-        owned_proc = start_server(root)
+        owned_proc, log_handle = start_server(root)
         started_here = True
         if owned_proc is None:
             message_box("Could not start server (.venv / cvetopt.bat).", error=True)
             return 1
-        if not wait_for_server():
+        if not wait_for_server(root):
+            # Capture early crash output
+            time.sleep(0.5)
+            dead = owned_proc.poll()
+            append_log(root, f"server timeout; proc exit={dead}")
             stop_server(root, owned_proc)
-            log_hint = root / "data" / "launcher-server.log"
-            message_box(
+            if log_handle is not None:
+                try:
+                    log_handle.close()
+                except OSError:
+                    pass
+            msg = (
                 f"Server did not answer in {START_TIMEOUT_SEC}s.\n\n"
-                f"See log:\n{log_hint}",
-                error=True,
+                f"Log:\n{root / 'data' / 'launcher-server.log'}\n"
+                f"{root / 'data' / 'launcher.log'}"
             )
+            message_box(msg, error=True)
             return 1
 
     try:
@@ -233,8 +268,28 @@ def main() -> int:
     finally:
         if started_here:
             stop_server(root, owned_proc)
+        if log_handle is not None:
+            try:
+                log_handle.close()
+            except OSError:
+                pass
+        append_log(root, "=== launcher exit")
 
     return 0
+
+
+def main() -> int:
+    if sys.platform != "win32":
+        message_box("cvetopt is Windows-only.", error=True)
+        return 1
+    try:
+        return run()
+    except Exception as e:
+        root = project_root()
+        tb = traceback.format_exc()
+        append_log(root, tb)
+        message_box(f"Launcher crash:\n{e}\n\nSee data\\launcher.log", error=True)
+        return 1
 
 
 if __name__ == "__main__":
