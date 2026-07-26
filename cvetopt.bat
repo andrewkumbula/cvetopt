@@ -50,8 +50,19 @@ if not errorlevel 1 (
 )
 
 if exist "%VENV_PY%" (
+  REM Reject venv that points at another user's AppData (breaks second Windows account).
+  findstr /I /C:"\Users\" "%ROOT%.venv\pyvenv.cfg" >nul 2>nul
+  if not errorlevel 1 (
+    findstr /I /C:"\AppData\" "%ROOT%.venv\pyvenv.cfg" >nul 2>nul
+    if not errorlevel 1 (
+      echo [cvetopt] .venv points to a per-user Python under AppData — Ilya cannot use it.
+      echo [cvetopt] Under admin run: fix-venv-for-all-users.bat
+      if not "%CVETOPT_HIDDEN%"=="1" pause
+      exit /b 1
+    )
+  )
   set "UV_MODE=venv"
-  echo [cvetopt] uv/python не в PATH — использую .venv: %VENV_PY%
+  echo [cvetopt] uv/python not in PATH — using .venv: %VENV_PY%
   goto ready
 )
 
