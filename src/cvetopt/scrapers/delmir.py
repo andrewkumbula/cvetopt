@@ -34,17 +34,31 @@ def _page_nav_timeout_ms(page: Page) -> int:
     return int(getattr(page, "_cvetopt_nav_timeout_ms", _DEFAULT_NAV_TIMEOUT_MS))
 
 
-def _playwright_proxy() -> dict | None:
-    server = (
-        os.getenv("PLAYWRIGHT_PROXY", "").strip()
-        or os.getenv("HTTPS_PROXY", "").strip()
-        or os.getenv("HTTP_PROXY", "").strip()
-    )
+def _playwright_proxy(env: EnvSettings | None = None) -> dict | None:
+    """
+    Proxy for Chromium. Values from EnvSettings (.env) take priority; then process env.
+    System WinINET proxy is NOT used by Playwright — must set PLAYWRIGHT_PROXY explicitly.
+    """
+    server = ""
+    user = ""
+    pwd = ""
+    if env is not None:
+        server = (env.playwright_proxy or "").strip()
+        user = (env.playwright_proxy_username or "").strip()
+        pwd = (env.playwright_proxy_password or "").strip()
+    if not server:
+        server = (
+            os.getenv("PLAYWRIGHT_PROXY", "").strip()
+            or os.getenv("HTTPS_PROXY", "").strip()
+            or os.getenv("HTTP_PROXY", "").strip()
+        )
     if not server:
         return None
+    if not user:
+        user = os.getenv("PLAYWRIGHT_PROXY_USERNAME", "").strip()
+    if not pwd:
+        pwd = os.getenv("PLAYWRIGHT_PROXY_PASSWORD", "").strip()
     proxy: dict[str, str] = {"server": server}
-    user = os.getenv("PLAYWRIGHT_PROXY_USERNAME", "").strip()
-    pwd = os.getenv("PLAYWRIGHT_PROXY_PASSWORD", "").strip()
     if user:
         proxy["username"] = user
         proxy["password"] = pwd
@@ -749,10 +763,16 @@ async def run_delmir_transport_job(
                 "--disable-background-networking",
             ],
         }
-        proxy = _playwright_proxy()
+        proxy = _playwright_proxy(env)
         if proxy:
             launch_kwargs["proxy"] = proxy
             await lg(f"Playwright proxy: {proxy['server']}")
+        else:
+            await lg(
+                "Playwright proxy: не задан (PLAYWRIGHT_PROXY в .env). "
+                "Системный прокси Windows Playwright не использует — "
+                "при chrome-error:// укажите прокси явно."
+            )
         await lg(f"del-mir: запуск Chromium (headless={pw_cfg.headless})…")
         browser: Browser = await p.chromium.launch(**launch_kwargs)
         context_opts: dict = {

@@ -308,6 +308,10 @@ class EnvSettings(BaseSettings):
     playwright_headless: bool = True
     # Перекрывает config.yaml playwright.navigation_timeout_ms (мс), 0 = из yaml.
     playwright_navigation_timeout_ms: int = 0
+    # Прокси для Playwright (del-mir / Biflorica), напр. http://127.0.0.1:7890 или socks5://127.0.0.1:1080
+    playwright_proxy: str = ""
+    playwright_proxy_username: str = ""
+    playwright_proxy_password: str = ""
 
     @property
     def project_root(self) -> Path:
