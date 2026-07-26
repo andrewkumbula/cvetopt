@@ -29,3 +29,7 @@ $shortcut.Description = "cvetopt"
 $shortcut.Save()
 
 Write-Host "OK: $lnkPath"
+Write-Host "Double-click starts server + app window; closing the window stops the server."
+if (Test-Path (Join-Path $ProjectRoot "cvetopt.exe")) {
+    Write-Host "Tip: rebuild exe after launcher changes: build-cvetopt-exe.bat"
+}
