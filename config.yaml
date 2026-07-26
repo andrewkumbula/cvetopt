@@ -86,6 +86,9 @@ ecuador_create:
   auto_after_biflorica: true
   use_create_file_macro: false
   archive_previous_on_create: true
+  # Строк сделок бывает больше, чем оформлено в шаблоне: раздать всем строкам
+  # формат первой строки таблицы (границы, выравнивание). false — как было.
+  normalize_row_format: true
 
 # Перевод Description в выгрузке Голландия_1_*.xlsx (словарь: B — англ., C — перевод).
 holland_translate:

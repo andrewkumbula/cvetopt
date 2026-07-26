@@ -193,6 +193,9 @@ class EcuadorCreateConfig(BaseModel):
     use_create_file_macro: bool = False
     # После создания нового «Эквадор …xlsm» — старые в архив (папка в UI «Настройки»).
     archive_previous_on_create: bool = True
+    # Строк сделок бывает больше, чем оформлено в шаблоне: раздать всем строкам
+    # формат первой строки таблицы (границы, выравнивание, формат чисел).
+    normalize_row_format: bool = True
 
 
 class DelmirSelectors(BaseModel):

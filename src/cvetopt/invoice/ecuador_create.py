@@ -29,6 +29,7 @@ _DATA_FIRST_ROW = 7
 _CLEAR_LAST_ROW = 500
 _COL_DATA_FIRST = 4  # D
 _COL_DATA_LAST = 28  # AB
+_XL_PASTE_FORMATS = -4122
 # Макросы должны быть включены при открытии книги — иначе Run требует переоткрытия.
 _MSO_AUTOMATION_SECURITY_LOW = 1
 _WORK_COPY_NAME = "_cvetopt_ecuador_work.xlsm"
@@ -543,6 +544,40 @@ def _write_deal_row(sheet: object, row: int, deal: EcuadorDealRow) -> None:
             _set_cell_value_ref(sheet, f"{col_letter}{row}", value)
 
 
+def _normalize_data_formatting(
+    app: object,
+    sheet: object,
+    *,
+    first_row: int,
+    last_row: int,
+    log: LogFn | None = None,
+) -> None:
+    """
+    В шаблоне оформлено ограниченное число строк, а сделок может быть больше —
+    лишние строки выглядят «сырыми»: без границ и с другим выравниванием.
+    Раздаём всем строкам данных формат первой строки таблицы.
+    """
+    if last_row <= first_row:
+        return
+
+    src = sheet.range((first_row, 1), (first_row, _COL_DATA_LAST)).api
+    dst = sheet.range((first_row + 1, 1), (last_row, _COL_DATA_LAST)).api
+    try:
+        src.Copy()
+        dst.PasteSpecial(Paste=_XL_PASTE_FORMATS)
+    finally:
+        try:
+            app.api.CutCopyMode = False
+        except Exception:
+            pass
+    try:
+        dst.RowHeight = src.RowHeight
+    except Exception:
+        pass
+    if log is not None:
+        log(f"Эквадор: формат таблицы выровнен по строкам {first_row}–{last_row}")
+
+
 def _copy_checkbox_assets(template_dir: Path, target_dir: Path) -> None:
     for name in _CHECKBOX_BMPS:
         src = template_dir / name
@@ -975,6 +1010,17 @@ def create_ecuador_file_from_biflorica(
         try:
             for idx, deal in enumerate(deals):
                 _write_deal_row(data_sheet, _DATA_FIRST_ROW + idx, deal)
+            if yaml_ecuador.normalize_row_format:
+                try:
+                    _normalize_data_formatting(
+                        app,
+                        data_sheet,
+                        first_row=_DATA_FIRST_ROW,
+                        last_row=last_row,
+                        log=log,
+                    )
+                except Exception as e:
+                    _lg(f"Эквадор: формат строк не выровнен ({e}) — данные записаны.")
             removed_fill = _strip_range_annotations(
                 data_sheet,
                 first_row=_DATA_FIRST_ROW,
