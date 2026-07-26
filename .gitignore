@@ -1,5 +1,7 @@
 .env
 .venv/
+.python/
+ms-playwright/
 venv/
 __pycache__/
 *.py[cod]

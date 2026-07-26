@@ -1,57 +1,63 @@
 @echo off
-REM Recreate .venv so it does NOT point to C:\Users\<admin>\AppData\...
-REM Run as Administrator (BananaMan), then Ilya can start cvetopt.
+REM Recreate .venv for ALL Windows accounts (not tied to BananaMan AppData).
+REM Run as Administrator. Needs "uv" in PATH.
 setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo [cvetopt] Project: %CD%
-echo [cvetopt] Looking for a machine-wide Python (not per-user AppData)...
-
-set "PY="
-if exist "%ProgramFiles%\Python311\python.exe" set "PY=%ProgramFiles%\Python311\python.exe"
-if not defined PY if exist "%ProgramFiles%\Python312\python.exe" set "PY=%ProgramFiles%\Python312\python.exe"
-if not defined PY if exist "%LocalAppData%\Programs\Python\Python311\python.exe" set "PY=%LocalAPPDATA%\Programs\Python\Python311\python.exe"
 
 where uv >nul 2>nul
 if errorlevel 1 (
-  echo [cvetopt] uv not in PATH. Open a console where "where uv" works, or install uv system-wide.
+  echo [cvetopt] ERROR: uv not found in PATH.
+  echo [cvetopt] Open a console where "where uv" works, then re-run this file.
   pause
   exit /b 1
 )
 
-if not defined PY (
-  echo [cvetopt] No Python in Program Files.
-  echo [cvetopt] Install Python 3.11+ with "Install for all users" checked, then re-run this bat.
-  echo [cvetopt] Or set PY to full path: set PY=C:\path\to\python.exe
+REM Shared Python inside the project - readable by Ilya and BananaMan.
+set "SHARED_PY_DIR=%CD%\.python"
+set "UV_PYTHON_INSTALL_DIR=%SHARED_PY_DIR%"
+
+echo [cvetopt] Installing Python 3.11 into: %SHARED_PY_DIR%
+uv python install 3.11
+if errorlevel 1 (
+  echo [cvetopt] ERROR: uv python install failed
   pause
   exit /b 1
 )
 
-echo [cvetopt] Using Python: %PY%
-"%PY%" -c "import sys; print(sys.version)"
-
-if exist ".venv\" (
-  echo [cvetopt] Removing old .venv (bound to admin AppData)...
+if exist ".venv" (
+  echo [cvetopt] Removing old .venv ...
   rmdir /s /q ".venv"
 )
 
-echo [cvetopt] uv sync with shared Python...
-set "UV_PYTHON=%PY%"
+echo [cvetopt] Creating .venv with shared Python ...
+set "UV_PYTHON=3.11"
 uv sync
 if errorlevel 1 (
-  echo [cvetopt] uv sync failed
+  echo [cvetopt] ERROR: uv sync failed
   pause
   exit /b 1
 )
 
-echo [cvetopt] Playwright browsers into shared folder...
+echo [cvetopt] Checking pyvenv.cfg ...
+type ".venv\pyvenv.cfg"
+findstr /I /C:"\Users\BananaMan\" ".venv\pyvenv.cfg" >nul 2>nul
+if not errorlevel 1 (
+  echo [cvetopt] WARNING: venv still mentions BananaMan - may fail for Ilya
+) else (
+  echo [cvetopt] OK: venv is not bound to BananaMan AppData
+)
+
+echo [cvetopt] Playwright into shared folder ...
 set "PLAYWRIGHT_BROWSERS_PATH=%CD%\ms-playwright"
 uv run playwright install chromium
 
-echo [cvetopt] Grant Ilya access...
-icacls "%CD%\.venv" /grant "server-cvetopt\Ilya:(OI)(CI)(M)" /T >nul
-if exist "%CD%\ms-playwright" icacls "%CD%\ms-playwright" /grant "server-cvetopt\Ilya:(OI)(CI)(M)" /T >nul
+echo [cvetopt] Granting Ilya access ...
+icacls "%CD%\.venv" /grant "server-cvetopt\Ilya:(OI)(CI)(M)" /T
+icacls "%CD%\.python" /grant "server-cvetopt\Ilya:(OI)(CI)(M)" /T
+if exist "%CD%\ms-playwright" icacls "%CD%\ms-playwright" /grant "server-cvetopt\Ilya:(OI)(CI)(M)" /T
 
 echo.
-echo [cvetopt] OK. Now under Ilya run: C:\Apps\cvetopt\cvetopt.bat
+echo [cvetopt] Done. Under Ilya run: cvetopt.bat
 pause
