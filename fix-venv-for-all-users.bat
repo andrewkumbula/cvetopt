@@ -1,6 +1,6 @@
 @echo off
 REM Recreate .venv for ALL Windows accounts (not tied to BananaMan AppData).
-REM Run as Administrator. Needs "uv" in PATH.
+REM Run as Administrator. Needs "uv" in PATH. Stop cvetopt first.
 setlocal EnableExtensions
 cd /d "%~dp0"
 
@@ -13,6 +13,12 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+
+echo [cvetopt] Stopping processes that may lock .venv ...
+taskkill /F /IM cvetopt.exe >nul 2>nul
+for /f "tokens=5" %%P in ('netstat -aon ^| findstr /R /C:":8000 .*LISTENING"') do taskkill /F /PID %%P >nul 2>nul
+taskkill /F /IM python.exe >nul 2>nul
+timeout /t 2 /nobreak >nul
 
 REM Shared Python inside the project - readable by Ilya and BananaMan.
 set "SHARED_PY_DIR=%CD%\.python"
@@ -27,8 +33,21 @@ if errorlevel 1 (
 )
 
 if exist ".venv" (
+  echo [cvetopt] Taking ownership of old .venv ...
+  takeown /F ".venv" /R /D Y >nul 2>nul
+  icacls ".venv" /grant "%USERNAME%:(OI)(CI)F" /T >nul 2>nul
+  icacls ".venv" /grant "Administrators:(OI)(CI)F" /T >nul 2>nul
   echo [cvetopt] Removing old .venv ...
-  rmdir /s /q ".venv"
+  rmdir /s /q ".venv" 2>nul
+  if exist ".venv" (
+    powershell -NoProfile -Command "Remove-Item -LiteralPath '.venv' -Recurse -Force -ErrorAction SilentlyContinue"
+  )
+  if exist ".venv" (
+    echo [cvetopt] ERROR: cannot delete .venv - close Excel/cvetopt and retry
+    echo [cvetopt] Or rename it:  ren .venv .venv.old
+    pause
+    exit /b 1
+  )
 )
 
 echo [cvetopt] Creating .venv with shared Python ...
