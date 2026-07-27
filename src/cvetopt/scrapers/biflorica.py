@@ -18,6 +18,7 @@ from playwright.async_api import Browser, Download, Locator, Page, async_playwri
 from cvetopt.core.job_manager import job_log, job_manager, job_step, raise_if_cancelled
 from cvetopt.core.models import Order
 from cvetopt.core.registry import DownloadRegistry
+from cvetopt.core.playwright_proxy import apply_playwright_proxy
 from cvetopt.core.runtime_settings import (
     archive_biflorica_download_dir,
     biflorica_download_filename,
@@ -435,10 +436,14 @@ async def run_biflorica_job(
         await job_log(job_id, msg)
 
     async with async_playwright() as p:
-        browser: Browser = await p.chromium.launch(
-            headless=pw_cfg.headless,
-            slow_mo=pw_cfg.slow_mo_ms or None,
-        )
+        launch_kwargs: dict = {
+            "headless": pw_cfg.headless,
+            "slow_mo": pw_cfg.slow_mo_ms or None,
+        }
+        proxy_server = apply_playwright_proxy(launch_kwargs, env)
+        if proxy_server:
+            await lg(f"Playwright proxy: {proxy_server}")
+        browser: Browser = await p.chromium.launch(**launch_kwargs)
         context_opts: dict = {
             "accept_downloads": True,
             "viewport": {"width": 1400, "height": 900},
