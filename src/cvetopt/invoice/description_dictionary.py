@@ -123,7 +123,76 @@ def load_description_dictionary(path: Path) -> dict[str, str]:
     raise ValueError(f"Неподдерживаемый формат словаря: {p.suffix}")
 
 
+def _build_folded_index(dictionary: dict[str, str]) -> dict[str, str]:
+    """casefold(ключ) → перевод; при коллизии побеждает более длинный исходный ключ."""
+    best: dict[str, tuple[int, str]] = {}
+    for src, dst in dictionary.items():
+        key = _norm_key(src)
+        val = _norm_key(dst)
+        if not key or not val:
+            continue
+        folded = key.casefold()
+        cur = best.get(folded)
+        if cur is None or len(key) > cur[0]:
+            best[folded] = (len(key), val)
+    return {k: v for k, (_, v) in best.items()}
+
+
+def translate_description(
+    dictionary: dict[str, str],
+    description: str,
+) -> tuple[str, bool, bool]:
+    """
+    Переводит Description по словарю.
+
+    1) Сначала точное совпадение всей строки.
+    2) Иначе — по словам/фразам слева направо (жадно берём самый длинный
+       ключ словаря). Слова без перевода **оставляем как есть** — не вырезаем.
+
+    Возвращает (текст_для_колонки, был_точный_хит, хоть_один_токен_из_словаря).
+    """
+    key = _norm_key(description)
+    if not key:
+        return "", False, False
+
+    exact = lookup_translation(dictionary, key)
+    if exact is not None:
+        return exact, True, True
+
+    tokens = key.split()
+    if not tokens:
+        return key, False, False
+
+    index = _build_folded_index(dictionary)
+    if not index:
+        return key, False, False
+
+    max_key_words = max((len(k.split()) for k in index), default=1)
+    out: list[str] = []
+    any_hit = False
+    i = 0
+    n = len(tokens)
+    while i < n:
+        matched = False
+        upper = min(max_key_words, n - i)
+        for length in range(upper, 0, -1):
+            phrase = " ".join(tokens[i : i + length])
+            hit = index.get(phrase.casefold())
+            if hit is not None:
+                out.append(hit)
+                i += length
+                any_hit = True
+                matched = True
+                break
+        if not matched:
+            out.append(tokens[i])
+            i += 1
+
+    return " ".join(out), False, any_hit
+
+
 def lookup_translation(dictionary: dict[str, str], description: str) -> str | None:
+    """Точное совпадение всей строки Description со словарём (B → C)."""
     key = _norm_key(description)
     if not key:
         return None

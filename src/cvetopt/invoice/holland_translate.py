@@ -12,7 +12,7 @@ from cvetopt.core.runtime_settings import _archive_one_entry, _archive_target_pa
 from cvetopt.invoice.description_dictionary import (
     append_missing_descriptions,
     load_description_dictionary,
-    lookup_translation,
+    translate_description,
 )
 from cvetopt.invoice.xlsx_patch import patch_xlsx_cell_values
 from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
@@ -176,13 +176,17 @@ def _build_translation_plan(
         if not text:
             continue
         total += 1
-        tr = lookup_translation(dictionary, text)
+        result, exact, any_hit = translate_description(dictionary, text)
         ref = f"{trans_col}{row_n}"
-        if tr:
-            updates[ref] = tr
+        # Никогда не очищаем ячейку: непереведённые слова остаются как есть.
+        updates[ref] = result
+        if exact:
             translated += 1
+        elif any_hit:
+            translated += 1
+            missing += 1
+            missing_texts.append(text)
         else:
-            updates[ref] = None
             missing += 1
             missing_texts.append(text)
     return desc_col, trans_col, updates, missing_texts, translated, missing, total
@@ -219,7 +223,7 @@ def _translate_via_xlwings(
         row_map = dict(rows_sorted)
         for row_n in range(first_row, last_row + 1):
             val = row_map.get(row_n)
-            values.append([val if val else None])
+            values.append([val])
         ws.range(f"{trans_col}{first_row}").resize(len(values), 1).value = values
         wb.save()
         log("Сохранено через Excel (xlwings) — структура файла не меняется.")
@@ -275,7 +279,8 @@ def translate_holland_export(
             _translate_via_xlwings(export_path, trans_col, updates, log=_lg)
             _lg(
                 f"Перевод в {export_path.name}: строк {total}, "
-                f"переведено {translated}, без перевода {missing}."
+                f"с переводом {translated}, без полного совпадения {missing} "
+                "(неизвестные слова оставлены как есть)."
             )
             return translated, missing, total
         except Exception as e:
@@ -284,8 +289,8 @@ def translate_holland_export(
     patch_xlsx_cell_values(export_path, updates)
     _lg(
         f"Перевод в {export_path.name}: строк {total}, "
-        f"переведено {translated}, без перевода {missing} "
-        "(XML-патч, чекбоксы и разметка сохранены)."
+        f"с переводом {translated}, без полного совпадения {missing} "
+        "(неизвестные слова оставлены как есть; XML-патч)."
     )
     return translated, missing, total
 
