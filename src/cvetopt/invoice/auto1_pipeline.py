@@ -492,15 +492,24 @@ def run_auto1_pipeline(
                 if add_holland_row_markers and holland_marker_assets_dir is not None:
                     from cvetopt.invoice.holland_markers import finalize_holland_after_auto1
 
-                    marked = finalize_holland_after_auto1(
-                        app,
-                        export_dir,
-                        holland_marker_assets_dir,
-                        _lg,
-                        auto1_sheet_name=cfg.sheet_name,
-                    )
-                    if marked is not None:
-                        _lg(f"Голландия: готово → {marked.name}")
+                    try:
+                        marked = finalize_holland_after_auto1(
+                            app,
+                            export_dir,
+                            holland_marker_assets_dir,
+                            _lg,
+                            auto1_sheet_name=cfg.sheet_name,
+                        )
+                        if marked is not None:
+                            _lg(f"Голландия: готово → {marked.name}")
+                    except Exception as e:
+                        # Выгрузка для склада уже есть; маркеры — доп. шаг.
+                        _lg(
+                            f"Голландия: маркеры не поставлены ({e}). "
+                            "Файл для склада сохранён. Включите в Excel: "
+                            "«Доверять доступ к объектной модели проекта VBA», "
+                            "затем повторите прогон — или поставьте квадраты вручную."
+                        )
 
         wb.save()
         _lg(f"Книга сохранена: {path.name}")

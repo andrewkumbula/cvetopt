@@ -259,44 +259,79 @@ def _ole_rgb(r: int, g: int, b: int) -> int:
     return int(r) + int(g) * 256 + int(b) * 65536
 
 
+def _is_usable_picture(pic: object) -> bool:
+    """Reject Excel error variants / empty COM results from failed LoadPicture."""
+    if pic is None:
+        return False
+    try:
+        # Error variant from Evaluate often has no usable COM methods.
+        if isinstance(pic, (int, float, str, bool)):
+            return False
+    except Exception:
+        return False
+    # IPictureDisp / StdPicture expose Handle or Type; bare ints do not.
+    for attr in ("Handle", "Type", "Width", "Height"):
+        try:
+            getattr(pic, attr)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _load_picture(app_api: object, image_path: str, *, wb: object | None = None) -> object | None:
     path = str(Path(image_path).resolve())
     if wb is not None:
         try:
             _ensure_picture_helper_vba(wb)
-            return wb.app.api.Run(f"{_PICTURE_HELPER_MODULE}.cv_LoadPicture", path)
+            pic = wb.app.api.Run(f"{_PICTURE_HELPER_MODULE}.cv_LoadPicture", path)
+            if _is_usable_picture(pic):
+                return pic
         except Exception:
             pass
     try:
         escaped = path.replace('"', '""')
-        return app_api.Evaluate(f'LoadPicture("{escaped}")')
+        pic = app_api.Evaluate(f'LoadPicture("{escaped}")')
+        if _is_usable_picture(pic):
+            return pic
     except Exception:
         pass
     try:
-        return app_api.LoadPicture(path)
+        pic = app_api.LoadPicture(path)
+        if _is_usable_picture(pic):
+            return pic
     except Exception:
         pass
     try:
         import win32com.client
 
-        return win32com.client.Dispatch(app_api).LoadPicture(path)
+        pic = win32com.client.Dispatch(app_api).LoadPicture(path)
+        if _is_usable_picture(pic):
+            return pic
     except Exception:
-        return None
+        pass
+    return None
 
 
 def _apply_command_button_picture(btn: object, image_path: str, app_api: object, *, wb: object | None) -> None:
     pic = _load_picture(app_api, image_path, wb=wb)
     if pic is not None:
-        btn.Picture = pic
-        return
+        try:
+            btn.Picture = pic
+            return
+        except Exception:
+            # Без «Доверять VBA» LoadPicture часто отдаёт объект неверного типа.
+            pass
     # Запасной вид без bmp (если VBA/LoadPicture недоступны).
     name = Path(image_path).name.casefold()
     if "red" in name:
         btn.BackColor = _ole_rgb(255, 0, 0)
     elif "green" in name:
         btn.BackColor = _ole_rgb(0, 128, 0)
-    btn.Caption = ""
-
+    try:
+        btn.Caption = ""
+    except Exception:
+        pass
 
 def _patch_path_auto_open_off(xlsm_path: Path) -> None:
     """
