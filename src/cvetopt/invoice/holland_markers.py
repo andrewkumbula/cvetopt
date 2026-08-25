@@ -880,6 +880,7 @@ def _apply_holland_markers_to_workbook(
             first_row=_HOLLAND_DATA_FIRST_ROW,
             last_row=last_row,
             assets_dir=assets_target,
+            log=log,
         )
         btn_count = _count_marker_buttons(ws)
         log(f"Голландия: маркеры готовы (COM), кнопок: {btn_count}.")
@@ -1097,6 +1098,7 @@ def _sync_holland_markers_com(
     first_row: int,
     last_row: int,
     assets_dir: Path,
+    log: LogFn | None = None,
 ) -> None:
     red_img = str((assets_dir / "Red_Check_Off.bmp").resolve())
     green_img = str((assets_dir / "Green_Check_Off.bmp").resolve())
@@ -1117,7 +1119,25 @@ def _sync_holland_markers_com(
     except Exception:
         missing = None
 
-    for row in range(first_row, last_row + 1):
+    # Без VBA LoadPicture на каждую кнопку — минуты. Один пробный вызов;
+    # если не вышло — только цвет BackColor (быстро).
+    use_pictures = False
+    try:
+        from cvetopt.invoice.ecuador_create import _load_picture
+
+        probe = _load_picture(app_api, red_img, wb=wb)
+        use_pictures = probe is not None
+    except Exception:
+        use_pictures = False
+    if log is not None:
+        n_rows = last_row - first_row + 1
+        mode = "с картинками" if use_pictures else "цветные квадраты (без VBA LoadPicture)"
+        log(f"Голландия: COM ставит {n_rows * 2} маркеров ({mode}), обычно 30–90 с…")
+
+    total_rows = last_row - first_row + 1
+    for i, row in enumerate(range(first_row, last_row + 1), start=1):
+        if log is not None and (i == 1 or i % 10 == 0 or i == total_rows):
+            log(f"Голландия: маркеры COM… строка {row} ({i}/{total_rows})")
         for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
             cell = sheet.api.Cells(row, col)
             # Filename="" при ClassType даёт DISP_E_TYPEMISMATCH на части Excel —
@@ -1143,7 +1163,21 @@ def _sync_holland_markers_com(
                         Height=float(cell.Height),
                     )
                 btn = ole.Object
-                _apply_command_button_picture(btn, img, app_api, wb=wb)
+                if use_pictures:
+                    _apply_command_button_picture(btn, img, app_api, wb=wb)
+                else:
+                    # Без LoadPicture — только цвет (иначе 156× проб VBA/Evaluate).
+                    from cvetopt.invoice.ecuador_create import _ole_rgb
+
+                    name = Path(img).name.casefold()
+                    if "red" in name:
+                        btn.BackColor = _ole_rgb(255, 0, 0)
+                    elif "green" in name:
+                        btn.BackColor = _ole_rgb(0, 128, 0)
+                    try:
+                        btn.Caption = ""
+                    except Exception:
+                        pass
                 btn.Caption = f"{prefix} {row} 0"
             except Exception as e:
                 raise RuntimeError(
