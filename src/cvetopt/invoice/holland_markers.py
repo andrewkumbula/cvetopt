@@ -1110,22 +1110,46 @@ def _sync_holland_markers_com(
     _delete_holland_marker_buttons(sheet)
     last_col = _holland_last_col(sheet)
 
+    try:
+        import pythoncom
+
+        missing = pythoncom.Missing
+    except Exception:
+        missing = None
+
     for row in range(first_row, last_row + 1):
         for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
             cell = sheet.api.Cells(row, col)
-            ole = sheet.api.OLEObjects().Add(
-                "Forms.CommandButton.1",
-                "",
-                False,
-                False,
-                float(cell.Left),
-                float(cell.Top),
-                float(cell.Width),
-                float(cell.Height),
-            )
-            btn = ole.Object
-            _apply_command_button_picture(btn, img, app_api, wb=wb)
-            btn.Caption = f"{prefix} {row} 0"
+            # Filename="" при ClassType даёт DISP_E_TYPEMISMATCH на части Excel —
+            # лучше Missing / именованные аргументы.
+            try:
+                if missing is not None:
+                    ole = sheet.api.OLEObjects().Add(
+                        ClassType="Forms.CommandButton.1",
+                        Filename=missing,
+                        Link=False,
+                        DisplayAsIcon=False,
+                        Left=float(cell.Left),
+                        Top=float(cell.Top),
+                        Width=float(cell.Width),
+                        Height=float(cell.Height),
+                    )
+                else:
+                    ole = sheet.api.OLEObjects().Add(
+                        ClassType="Forms.CommandButton.1",
+                        Left=float(cell.Left),
+                        Top=float(cell.Top),
+                        Width=float(cell.Width),
+                        Height=float(cell.Height),
+                    )
+                btn = ole.Object
+                _apply_command_button_picture(btn, img, app_api, wb=wb)
+                btn.Caption = f"{prefix} {row} 0"
+            except Exception as e:
+                raise RuntimeError(
+                    f"Маркер row={row} col={col}: {e}. "
+                    "Включите «Доверять доступ к объектной модели VBA» в Excel."
+                ) from e
 
         color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
         sheet.api.Range(
