@@ -1112,13 +1112,6 @@ def _sync_holland_markers_com(
     _delete_holland_marker_buttons(sheet)
     last_col = _holland_last_col(sheet)
 
-    try:
-        import pythoncom
-
-        missing = pythoncom.Missing
-    except Exception:
-        missing = None
-
     # Без VBA LoadPicture на каждую кнопку — минуты. Один пробный вызов;
     # если не вышло — только цвет BackColor (быстро).
     use_pictures = False
@@ -1140,33 +1133,30 @@ def _sync_holland_markers_com(
             log(f"Голландия: маркеры COM… строка {row} ({i}/{total_rows})")
         for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
             cell = sheet.api.Cells(row, col)
-            # Filename="" при ClassType даёт DISP_E_TYPEMISMATCH на части Excel —
-            # лучше Missing / именованные аргументы.
+            left = float(cell.Left)
+            top = float(cell.Top)
+            width = max(float(cell.Width), 14.0)
+            height = max(float(cell.Height), 14.0)
+            # Как в VBA: Add без координат, потом Left/Top на Object —
+            # иначе все кнопки падают в (0,0) / A1.
             try:
-                if missing is not None:
-                    ole = sheet.api.OLEObjects().Add(
-                        ClassType="Forms.CommandButton.1",
-                        Filename=missing,
-                        Link=False,
-                        DisplayAsIcon=False,
-                        Left=float(cell.Left),
-                        Top=float(cell.Top),
-                        Width=float(cell.Width),
-                        Height=float(cell.Height),
-                    )
-                else:
-                    ole = sheet.api.OLEObjects().Add(
-                        ClassType="Forms.CommandButton.1",
-                        Left=float(cell.Left),
-                        Top=float(cell.Top),
-                        Width=float(cell.Width),
-                        Height=float(cell.Height),
-                    )
+                ole = sheet.api.OLEObjects().Add(ClassType="Forms.CommandButton.1")
+                try:
+                    ole.Name = f"cvM_{prefix}_{row}"
+                except Exception:
+                    pass
                 btn = ole.Object
+                btn.Left = left
+                btn.Top = top
+                btn.Width = width
+                btn.Height = height
+                try:
+                    btn.TakeFocusOnClick = False
+                except Exception:
+                    pass
                 if use_pictures:
                     _apply_command_button_picture(btn, img, app_api, wb=wb)
                 else:
-                    # Без LoadPicture — только цвет (иначе 156× проб VBA/Evaluate).
                     from cvetopt.invoice.ecuador_create import _ole_rgb
 
                     name = Path(img).name.casefold()
@@ -1175,7 +1165,7 @@ def _sync_holland_markers_com(
                     elif "green" in name:
                         btn.BackColor = _ole_rgb(0, 128, 0)
                     try:
-                        btn.Caption = ""
+                        btn.Font.Size = 1
                     except Exception:
                         pass
                 btn.Caption = f"{prefix} {row} 0"
