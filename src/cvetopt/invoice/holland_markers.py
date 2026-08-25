@@ -37,6 +37,9 @@ _ZEBRA_ODD = 9944773
 
 _CV_SYNC_MACRO = "cv_SyncHollandMarkers"
 _CV_WIRE_MACRO = "cv_WireHollandMarkerButtons"
+_CV_CLICK_MACRO = "cvHollandMarkerClick"
+_MSO_SHAPE_RECTANGLE = 1
+_MSO_FALSE = 0
 _MARKER_MODULE = "Module1"  # как cv_SyncRowCheckboxes в Эквадоре
 _LEGACY_MARKER_MODULE = "cvHollandMarkers"
 _MARKER_CLASS = "cvHollandButtonHandler"
@@ -142,6 +145,56 @@ Public Sub cvDelHollandMarkerButtons(aSheet As String)
         End If
 NextOle:
     Next
+End Sub
+
+Public Sub cvHollandMarkerClick()
+    Dim nm As String
+    Dim ws As Worksheet
+    Dim shp As Shape
+    Dim prefix As String
+    Dim rowNum As Long
+    Dim lastCol As Long
+    Dim onOff As String
+    Dim zebra As Long
+    On Error Resume Next
+    nm = Application.Caller
+    If nm = "" Then Exit Sub
+    Set ws = ThisWorkbook.Worksheets(1)
+    Set shp = ws.Shapes(nm)
+    If shp Is Nothing Then Exit Sub
+    On Error GoTo 0
+    If Left(nm, 4) <> "cvM_" Then Exit Sub
+    prefix = Mid(nm, 5, 1)
+    rowNum = CLng(Mid(nm, 7))
+    lastCol = ws.Range("C1").End(xlToRight).Column
+    onOff = shp.AlternativeText
+    If onOff = "" Then onOff = "0"
+    If (rowNum Mod 2) = 0 Then
+        zebra = 12379351
+    Else
+        zebra = 9944773
+    End If
+    If prefix = "1" Then
+        If onOff = "0" Then
+            shp.Fill.ForeColor.RGB = RGB(180, 0, 0)
+            shp.AlternativeText = "1"
+            ws.Range(ws.Cells(rowNum, 3), ws.Cells(rowNum, lastCol)).Interior.Color = RGB(255, 209, 209)
+        Else
+            shp.Fill.ForeColor.RGB = RGB(255, 0, 0)
+            shp.AlternativeText = "0"
+            ws.Range(ws.Cells(rowNum, 3), ws.Cells(rowNum, lastCol)).Interior.Color = zebra
+        End If
+    Else
+        If onOff = "0" Then
+            shp.Fill.ForeColor.RGB = RGB(0, 160, 0)
+            shp.AlternativeText = "1"
+            ws.Range(ws.Cells(rowNum, 3), ws.Cells(rowNum, lastCol)).Interior.Color = RGB(0, 255, 0)
+        Else
+            shp.Fill.ForeColor.RGB = RGB(0, 128, 0)
+            shp.AlternativeText = "0"
+            ws.Range(ws.Cells(rowNum, 3), ws.Cells(rowNum, lastCol)).Interior.Color = zebra
+        End If
+    End If
 End Sub
 """
 
@@ -278,6 +331,7 @@ def _ensure_holland_marker_macros(wb: object) -> None:
     if (
         f"Sub {_CV_SYNC_MACRO}" in existing
         and f"Sub {_CV_WIRE_MACRO}" in existing
+        and f"Sub {_CV_CLICK_MACRO}" in existing
         and "Sub Auto_Open" in existing
         and "cvDelExportCheckboxes" in existing
     ):
@@ -1046,6 +1100,13 @@ def _is_command_button_ole(ole: object) -> bool:
 
 def _count_marker_buttons(sheet: object) -> int:
     count = 0
+    shapes = sheet.api.Shapes
+    for i in range(1, int(shapes.Count) + 1):
+        try:
+            if str(shapes.Item(i).Name).startswith("cvM_"):
+                count += 1
+        except Exception:
+            continue
     oles = sheet.api.OLEObjects()
     for i in range(1, int(oles.Count) + 1):
         try:
@@ -1054,6 +1115,9 @@ def _count_marker_buttons(sheet: object) -> int:
             continue
         try:
             if str(ole.Name) in _HOLLAND_RESERVED_OLE:
+                continue
+            if str(ole.Name).startswith("cvM_"):
+                count += 1
                 continue
         except Exception:
             pass
@@ -1106,73 +1170,60 @@ def _sync_holland_markers_com(
         raise FileNotFoundError(f"Нет bmp в {assets_dir}")
 
     app_api = wb.app.api
-    sheet.api.Columns("A:A").ColumnWidth = 2.2
-    sheet.api.Columns("B:B").ColumnWidth = 2.2
+    _ = app_api
+    sheet.api.Columns("A:A").ColumnWidth = 3.2
+    sheet.api.Columns("B:B").ColumnWidth = 3.2
     _delete_export_checkboxes(sheet)
     _delete_holland_marker_buttons(sheet)
     last_col = _holland_last_col(sheet)
 
-    # Без VBA LoadPicture на каждую кнопку — минуты. Один пробный вызов;
-    # если не вышло — только цвет BackColor (быстро).
-    use_pictures = False
+    click_macro = ""
     try:
-        from cvetopt.invoice.ecuador_create import _load_picture
-
-        probe = _load_picture(app_api, red_img, wb=wb)
-        use_pictures = probe is not None
+        if _vb_has_macro(wb.api.VBProject, _MARKER_MODULE, _CV_CLICK_MACRO):
+            click_macro = _CV_CLICK_MACRO
     except Exception:
-        use_pictures = False
+        click_macro = ""
     if log is not None:
         n_rows = last_row - first_row + 1
-        mode = "с картинками" if use_pictures else "цветные квадраты (без VBA LoadPicture)"
-        log(f"Голландия: COM ставит {n_rows * 2} маркеров ({mode}), обычно 30–90 с…")
+        extra = "клики OnAction" if click_macro else "без макроса клика — включите VBA и повторите"
+        log(f"Голландия: COM ставит {n_rows * 2} квадратов ({extra})…")
 
     total_rows = last_row - first_row + 1
     for i, row in enumerate(range(first_row, last_row + 1), start=1):
         if log is not None and (i == 1 or i % 10 == 0 or i == total_rows):
             log(f"Голландия: маркеры COM… строка {row} ({i}/{total_rows})")
-        for col, img, prefix in ((1, red_img, "1"), (2, green_img, "2")):
+        for col, rgb, prefix in (
+            (1, 255, "1"),  # red
+            (2, 0x008000, "2"),  # green 0,128,0
+        ):
             cell = sheet.api.Cells(row, col)
-            left = float(cell.Left)
-            top = float(cell.Top)
-            width = max(float(cell.Width), 14.0)
-            height = max(float(cell.Height), 14.0)
-            # Как в VBA: Add без координат, потом Left/Top на Object —
-            # иначе все кнопки падают в (0,0) / A1.
+            left = float(cell.Left) + 1.0
+            top = float(cell.Top) + 1.0
+            width = max(float(cell.Width) - 2.0, 12.0)
+            height = max(float(cell.Height) - 2.0, 12.0)
             try:
-                ole = sheet.api.OLEObjects().Add(ClassType="Forms.CommandButton.1")
+                shp = sheet.api.Shapes.AddShape(
+                    _MSO_SHAPE_RECTANGLE, left, top, width, height
+                )
+                shp.Name = f"cvM_{prefix}_{row}"
+                shp.Fill.ForeColor.RGB = rgb if prefix == "1" else 0x008000
                 try:
-                    ole.Name = f"cvM_{prefix}_{row}"
+                    shp.Line.Visible = _MSO_FALSE
                 except Exception:
                     pass
-                btn = ole.Object
-                btn.Left = left
-                btn.Top = top
-                btn.Width = width
-                btn.Height = height
                 try:
-                    btn.TakeFocusOnClick = False
+                    shp.TextFrame.Characters.Text = ""
                 except Exception:
                     pass
-                if use_pictures:
-                    _apply_command_button_picture(btn, img, app_api, wb=wb)
-                else:
-                    from cvetopt.invoice.ecuador_create import _ole_rgb
-
-                    name = Path(img).name.casefold()
-                    if "red" in name:
-                        btn.BackColor = _ole_rgb(255, 0, 0)
-                    elif "green" in name:
-                        btn.BackColor = _ole_rgb(0, 128, 0)
+                shp.AlternativeText = "0"
+                if click_macro:
                     try:
-                        btn.Font.Size = 1
+                        shp.OnAction = click_macro
                     except Exception:
-                        pass
-                btn.Caption = f"{prefix} {row} 0"
+                        shp.OnAction = f"'{wb.name}'!{click_macro}"
             except Exception as e:
                 raise RuntimeError(
-                    f"Маркер row={row} col={col}: {e}. "
-                    "Включите «Доверять доступ к объектной модели VBA» в Excel."
+                    f"Маркер row={row} col={col}: {e}."
                 ) from e
 
         color = _ZEBRA_EVEN if row % 2 == 0 else _ZEBRA_ODD
@@ -1209,6 +1260,28 @@ def _inject_marker_vba(wb: object) -> list[str]:
 
 def _wire_holland_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
     _prepare_workbook_for_macro_run(wb)
+    ws = wb.sheets[0]
+    click_ok = False
+    try:
+        click_ok = _vb_has_macro(wb.api.VBProject, _MARKER_MODULE, _CV_CLICK_MACRO)
+    except Exception:
+        click_ok = False
+    assigned = 0
+    if click_ok:
+        shapes = ws.api.Shapes
+        for i in range(1, int(shapes.Count) + 1):
+            shp = shapes.Item(i)
+            try:
+                if not str(shp.Name).startswith("cvM_"):
+                    continue
+                shp.OnAction = _CV_CLICK_MACRO
+                assigned += 1
+            except Exception:
+                continue
+        if assigned:
+            log(f"Голландия: клики подключены ({assigned} квадратов, OnAction).")
+            return
+
     wb_name = str(wb.name)
     specs = (
         _CV_WIRE_MACRO,
@@ -1222,7 +1295,12 @@ def _wire_holland_marker_clicks(app: object, wb: object, *, log: LogFn) -> None:
             return
         except Exception:
             continue
-    log("Голландия: клики не подключились — откройте файл с включёнными макросами.")
+    log(
+        "Голландия: клики не подключены. В Excel: Параметры → Центр управления "
+        "безопасностью → Параметры макросов → «Доверять доступ к объектной модели "
+        "проекта VBA», закройте все Excel и повторите прогон. Текущий файл без "
+        "макроса кликать не будет."
+    )
 
 
 def _sync_holland_markers_vba(
