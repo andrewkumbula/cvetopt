@@ -98,7 +98,7 @@ def _close_existing_excel(log: LogFn) -> None:
 def _preflight(
     cfg: Auto1PipelineConfig,
     workbook_path: Path,
-    sklad_export_dir: Path,
+    sklad_export_dir: Path | None,
     log: LogFn,
 ) -> None:
     if not workbook_path.is_file():
@@ -142,10 +142,13 @@ def _preflight(
     else:
         log(f"Файл цен: {prices[0].name}")
 
-    sklad_export_dir.mkdir(parents=True, exist_ok=True)
-    VBA_COPY_DIR.mkdir(parents=True, exist_ok=True)
-    log(f"Папка выгрузки: {sklad_export_dir}")
-    log(f"Копия для склада: {VBA_COPY_DIR}")
+    if sklad_export_dir is not None:
+        sklad_export_dir.mkdir(parents=True, exist_ok=True)
+        VBA_COPY_DIR.mkdir(parents=True, exist_ok=True)
+        log(f"Папка выгрузки: {sklad_export_dir}")
+        log(f"Копия для склада: {VBA_COPY_DIR}")
+    else:
+        log("Выгрузка for sklad в этом прогоне не выполняется.")
 
 
 CV_RUNNER_PREFIX = "cv_Run_"
@@ -376,6 +379,20 @@ def _invoke_sheet_click_macro(
     raise RuntimeError(f"Не удалось вызвать {macro}. {hint} ({tail})")
 
 
+def _pipeline_steps_until(stop_after: str | None) -> tuple[tuple[str, str], ...]:
+    """stop_after — label из PIPELINE_STEPS (например «Sort»); None = вся цепочка."""
+    if not stop_after:
+        return PIPELINE_STEPS
+    want = stop_after.strip().casefold()
+    out: list[tuple[str, str]] = []
+    for label, macro in PIPELINE_STEPS:
+        out.append((label, macro))
+        if label.casefold() == want:
+            return tuple(out)
+    known = ", ".join(label for label, _ in PIPELINE_STEPS)
+    raise ValueError(f"Неизвестный stop_after={stop_after!r}. Известны: {known}")
+
+
 def run_auto1_pipeline(
     workbook_path: Path,
     cfg: Auto1PipelineConfig,
@@ -383,12 +400,16 @@ def run_auto1_pipeline(
     sklad_export_dir: Path | None = None,
     holland_marker_assets_dir: Path | None = None,
     add_holland_row_markers: bool = False,
+    stop_after: str | None = None,
     log: LogFn | None = None,
 ) -> list[Auto1StepResult]:
     """
     Выполняет цепочку макросов на листе auto1 через Excel (Windows).
     Сохраняет книгу после завершения.
+
+    stop_after: оборвать цепочку после шага (например «Sort» — без For sklad).
     """
+    steps = _pipeline_steps_until(stop_after)
     if sys.platform != "win32":
         raise RuntimeError(
             "Прогон auto1 (Scan → Import → Calculate → Sort → for sklad) "
@@ -398,8 +419,9 @@ def run_auto1_pipeline(
     _lg = log or _default_log
     path = workbook_path.resolve()
     export_dir = (sklad_export_dir or DEFAULT_SKLAD_EXPORT_DIR).resolve()
+    needs_export = any(label == "For sklad" for label, _ in steps)
 
-    _preflight(cfg, path, export_dir, _lg)
+    _preflight(cfg, path, export_dir if needs_export else None, _lg)
     _close_existing_excel(_lg)
 
     if cfg.backup_before_run:
@@ -450,12 +472,13 @@ def run_auto1_pipeline(
         _lg(f"Лист «{cfg.sheet_name}» (код VBA: {codename})")
 
         step_delay = _step_delay_seconds()
+        step_names = " → ".join(label for label, _ in steps)
         _lg(
-            "Жмём кнопки auto1 по порядку, как вручную "
+            f"Жмём кнопки auto1: {step_names} "
             f"(пауза между шагами {step_delay:.0f} с; AUTO1_STEP_DELAY_SEC меняет)."
         )
 
-        for idx, (label, macro) in enumerate(PIPELINE_STEPS):
+        for idx, (label, macro) in enumerate(steps):
             step_t0 = time.monotonic()
             if idx > 0:
                 _settle_excel(app, _lg, seconds=step_delay, why=f"перед «{label}»")
@@ -513,10 +536,13 @@ def run_auto1_pipeline(
 
         wb.save()
         _lg(f"Книга сохранена: {path.name}")
-        _lg(
-            "Выгрузка для склада: C:\\Инвойсы склад\\Голландия_1_<дата>.xlsm "
-            "(btnExport2 + слева A–B красный/зелёный квадрат при включённой опции)."
-        )
+        if needs_export:
+            _lg(
+                "Выгрузка для склада: C:\\Инвойсы склад\\Голландия_1_<дата>.xlsm "
+                "(btnExport2 + слева A–B красный/зелёный квадрат при включённой опции)."
+            )
+        else:
+            _lg(f"Auto1 остановлен после «{done[-1].label}» (без For sklad).")
         return done
     finally:
         if wb is not None:

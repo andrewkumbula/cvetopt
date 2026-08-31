@@ -23,6 +23,7 @@ Auto_new.xls
 dist/
 build/launcher/
 cvetopt.exe
+cvetopt-debug.exe
 *.egg-info/
 *.webm
 *.mp4
