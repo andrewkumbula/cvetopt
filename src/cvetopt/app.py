@@ -36,6 +36,7 @@ from cvetopt.scrapers.holland_full_cycle import run_holland_full_cycle_job
 from cvetopt.scrapers.holland_translate import run_holland_translate_job
 from cvetopt.scrapers.holland_translated import run_holland_translated_job
 from cvetopt.scrapers.sklad_template_copy import run_sklad_template_copy_job
+from cvetopt.scrapers.gypsophila_split import run_gypsophila_split_job
 from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
 from cvetopt.scrapers.delmir import run_delmir_transport_job
@@ -443,6 +444,18 @@ async def run_sklad_template_copy_route(request: Request):
     env = EnvSettings()
     job = job_manager.create_job("sklad_template_copy")
     job_manager.schedule(job.id, run_sklad_template_copy_job(job.id, env))
+    return RedirectResponse(url=f"/job/{job.id}", status_code=303)
+
+
+@app.post("/run/gypsophila-split")
+async def run_gypsophila_split_route(request: Request):
+    """Biflorica → «… Гипсофила.xlsx» и «… Роза.xlsx» (аналог макроса Гипсофила + Да)."""
+    busy = _reject_if_busy()
+    if busy is not None:
+        return busy
+    env = EnvSettings()
+    job = job_manager.create_job("gypsophila_split")
+    job_manager.schedule(job.id, run_gypsophila_split_job(job.id, env))
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
