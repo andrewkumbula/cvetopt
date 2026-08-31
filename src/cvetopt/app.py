@@ -436,7 +436,7 @@ async def run_holland_translated_route(request: Request):
 
 @app.post("/run/sklad-template-copy")
 async def run_sklad_template_copy_route(request: Request):
-    """Копия «шаблон» → «ДД.ММ.ГГГГ» в папке Инвойсы склад."""
+    """Копия «шаблон» → «шаблон ДД.ММ.ГГГГ» в папке Инвойсы склад."""
     busy = _reject_if_busy()
     if busy is not None:
         return busy

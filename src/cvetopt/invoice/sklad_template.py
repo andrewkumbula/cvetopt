@@ -18,9 +18,9 @@ def _default_log(_msg: str) -> None:
 
 
 def dated_template_name(on_date: date, *, suffix: str) -> str:
-    """Имя копии: ДД.ММ.ГГГГ + расширение шаблона (как у Голландия_1_)."""
+    """Имя копии: «шаблон ДД.ММ.ГГГГ» + расширение исходного файла."""
     ext = suffix if suffix.startswith(".") else f".{suffix}"
-    return f"{on_date.strftime('%d.%m.%Y')}{ext.lower()}"
+    return f"шаблон {on_date.strftime('%d.%m.%Y')}{ext.lower()}"
 
 
 def find_sklad_template(sklad_dir: Path) -> Path:
@@ -63,7 +63,7 @@ def copy_sklad_template_to_date(
     log: LogFn | None = None,
 ) -> Path:
     """
-    Копирует «шаблон» → «ДД.ММ.ГГГГ.<ext>» в той же папке.
+    Копирует «шаблон» → «шаблон ДД.ММ.ГГГГ.<ext>» в той же папке.
     Оригинал не трогает. Если файл на дату уже есть — ошибка (если не overwrite).
     """
     _lg = log or _default_log

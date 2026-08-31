@@ -14,7 +14,7 @@ from cvetopt.invoice.sklad_template import copy_sklad_template_to_date
 
 
 async def run_sklad_template_copy_job(job_id: str, env: EnvSettings) -> None:
-    """Копия «шаблон» → «ДД.ММ.ГГГГ» в папке Инвойсы склад (ручное заполнение сетки дальше)."""
+    """Копия «шаблон» → «шаблон ДД.ММ.ГГГГ» в папке Инвойсы склад (ручное заполнение сетки дальше)."""
     yaml_cfg = env.yaml_config()
     runtime = load_runtime_settings(env)
     sklad_dir = resolve_holland_sklad_dir(
