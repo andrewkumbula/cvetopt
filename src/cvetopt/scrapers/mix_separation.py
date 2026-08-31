@@ -25,10 +25,14 @@ async def run_mix_separation_job(
     Заполненный «Шаблон ДД.ММ.ГГ» + Biflorica Mix (50/60) →
     отдельные позиции со средневзвешенной ценой без плантации.
     """
+    yaml_cfg = env.yaml_config()
     runtime = load_runtime_settings(env)
     sklad_dir = resolve_holland_sklad_dir(
         env,
-        effective_holland_sklad_dir_raw(env, runtime),
+        effective_holland_sklad_dir_raw(
+            runtime,
+            yaml_dir=yaml_cfg.holland_translate.sklad_output_dir,
+        ),
     )
     download_dir = resolve_biflorica_download_dir(env, runtime.biflorica_download_dir)
     await job_log(job_id, f"Миксы: папка склада {sklad_dir}")
