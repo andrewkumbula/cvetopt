@@ -149,8 +149,26 @@ _HEADER_HINTS = frozenset(
 )
 
 
+_CYRILLIC_LETTER_RE = re.compile(r"[а-яё]", re.IGNORECASE)
+_LATIN_LETTER_RE = re.compile(r"[a-z]", re.IGNORECASE)
+
+
 def _norm_key(text: str) -> str:
     return " ".join(str(text or "").split()).strip()
+
+
+def looks_like_russian_description(text: str) -> bool:
+    """Description уже на русском — переводить/дописывать в колонку B словаря не нужно."""
+    key = _norm_key(text)
+    if not key:
+        return False
+    cyr = len(_CYRILLIC_LETTER_RE.findall(key))
+    if cyr == 0:
+        return False
+    lat = len(_LATIN_LETTER_RE.findall(key))
+    if lat == 0:
+        return True
+    return cyr > lat
 
 
 def is_holland_product_description(
@@ -437,6 +455,9 @@ def _unique_missing_descriptions(
         if not key:
             continue
         if not is_holland_product_description(key, extra=extra):
+            skipped_non_product += 1
+            continue
+        if looks_like_russian_description(key):
             skipped_non_product += 1
             continue
         folded = key.casefold()

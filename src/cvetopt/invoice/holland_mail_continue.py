@@ -17,6 +17,7 @@ from cvetopt.invoice.description_dictionary import (
     append_missing_descriptions,
     is_holland_product_description,
     load_description_dictionary,
+    looks_like_russian_description,
     translate_description,
 )
 from cvetopt.invoice.xlsx_patch import patch_xlsx_cell_values
@@ -214,7 +215,7 @@ def _plan_updates_xls(
         new_text, exact, any_hit = translate_description(dictionary, raw)
         if exact or any_hit:
             translated += 1
-        if not exact:
+        if not exact and not looks_like_russian_description(raw):
             missing.append(raw)
 
         length = length_without_cm(sheet.cell_value(row, layout.length_col))
@@ -301,7 +302,7 @@ def _plan_updates_xlsx(
         new_text, exact, any_hit = translate_description(dictionary, raw)
         if exact or any_hit:
             translated += 1
-        if not exact:
+        if not exact and not looks_like_russian_description(raw):
             missing.append(raw)
         length = length_without_cm(row.get(length_col, ""))
         rose = is_rose_description(raw) or is_rose_description(new_text)

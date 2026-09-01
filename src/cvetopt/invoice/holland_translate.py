@@ -15,6 +15,7 @@ from cvetopt.invoice.description_dictionary import (
     append_missing_descriptions,
     is_holland_product_description,
     load_description_dictionary,
+    looks_like_russian_description,
     translate_description,
 )
 from cvetopt.invoice.xlsx_patch import patch_xlsx_cell_values
@@ -189,10 +190,12 @@ def _build_translation_plan(
         elif any_hit:
             translated += 1
             missing += 1
-            missing_texts.append(text)
+            if not looks_like_russian_description(text):
+                missing_texts.append(text)
         else:
             missing += 1
-            missing_texts.append(text)
+            if not looks_like_russian_description(text):
+                missing_texts.append(text)
     return desc_col, trans_col, updates, missing_texts, translated, missing, total
 
 
