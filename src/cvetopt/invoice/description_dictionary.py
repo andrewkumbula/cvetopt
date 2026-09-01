@@ -20,10 +20,12 @@ _DICT_COL_EN_LETTER = "B"
 _DICT_COL_RU_LETTER = "C"
 
 # Служебные строки инвойса Enigma — не сорта, не дописываем в словарь.
+# Нижняя таблица Cargo (Carnations, Roses…) и блок fees/box в длинном файле папки 2.
 _NON_PRODUCT_EXACT = frozenset(
     {
         "description",
         "subtotal",
+        "subtotal goods",
         "total",
         "total in",
         "total out",
@@ -37,6 +39,18 @@ _NON_PRODUCT_EXACT = frozenset(
         "others",
         "other",
         "enigma flowers",
+        "aqua gerbera",
+        # Cargo summary (англ. категории внизу инвойса)
+        "carnations",
+        "chrysanthemums",
+        "eustoma",
+        "gerbera",
+        "roses",
+        "alstroemeria",
+        "gypsophila",
+        "lilies",
+        "lilies (lilium spp.)",
+        "lilium",
     }
 )
 _NON_PRODUCT_PREFIXES = (
@@ -46,6 +60,7 @@ _NON_PRODUCT_PREFIXES = (
     "temp tale",
     "box ",
     "total ",
+    "aqua ",
 )
 _NON_PRODUCT_CONTAINS = (
     " fees",
