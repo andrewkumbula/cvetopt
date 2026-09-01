@@ -116,6 +116,7 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
     """
     Первая таблица «Эквадор»: строки до «Итог».
     Колонки длин — из строки заголовка (F=50, G=60, …).
+    Код сорта: колонка B или C (в новых шаблонах «Эквадор» в B, в старых — в C).
     """
     path = path.resolve()
     suffix = path.suffix.lower()
@@ -124,13 +125,18 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
 
     rows = grid_by_row(read_xlsx_grid(path))
     header_row: int | None = None
+    code_col: str = "C"
     length_cols: dict[str, str] = {}  # length label → col letter
 
     for row_no in sorted(rows):
         cells = rows[row_no]
-        if _norm(cells.get("C", "")).casefold() != "эквадор":
+        ecuador_col: str | None = None
+        for col in ("B", "C"):
+            if _norm(cells.get(col, "")).casefold() == "эквадор":
+                ecuador_col = col
+                break
+        if ecuador_col is None:
             continue
-        # строка с длинами в F…
         found: dict[str, str] = {}
         for col, val in cells.items():
             label = _norm(val)
@@ -138,6 +144,7 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
                 found[label] = col
         if "50" in found or "60" in found:
             header_row = row_no
+            code_col = ecuador_col
             length_cols = found
             break
 
@@ -149,7 +156,11 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
     for row_no in range(header_row + 1, max(rows) + 1):
         cells = rows.get(row_no, {})
         d = _norm(cells.get("D", ""))
-        c = _norm(cells.get("C", ""))
+        c = _norm(cells.get(code_col, ""))
+        if not c and code_col == "B":
+            c = _norm(cells.get("C", ""))
+        elif not c and code_col == "C":
+            c = _norm(cells.get("B", ""))
         if d.casefold() == "итог":
             for lab in _TARGET_LENGTHS:
                 col = length_cols.get(lab)
