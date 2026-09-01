@@ -102,6 +102,63 @@ def find_biflorica_deals_header(
     return None
 
 
+def diagnose_biflorica_report(path: Path) -> str | None:
+    """None — файл пригоден; иначе короткая причина на русском."""
+    if not path.is_file():
+        return "файл не найден"
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return str(exc)
+    if size < 512:
+        return f"слишком маленький ({size} байт) — вероятно пустой или обрыв скачивания"
+    try:
+        head = path.read_bytes()[:4]
+    except OSError as exc:
+        return str(exc)
+    if head[:2] != b"PK":
+        return (
+            "не настоящий xlsx (не ZIP) — откройте в Excel: если не открывается, "
+            "удалите и скачайте отчёт заново кнопкой Biflorica"
+        )
+    try:
+        rows = grid_by_row(read_xlsx_grid(path))
+    except zipfile.BadZipFile:
+        return "повреждённый xlsx — удалите и скачайте отчёт заново"
+    except (OSError, ValueError, KeyError) as exc:
+        return f"не удалось прочитать: {exc}"
+    if not rows:
+        return "пустой лист Excel"
+    if find_biflorica_deals_header(rows) is not None:
+        return None
+
+    marker_rows: list[tuple[int, dict[str, str]]] = []
+    for row_no in sorted(rows):
+        row = rows[row_no]
+        if _biflorica_header_marker_row(row):
+            marker_rows.append(
+                (row_no, {col: _norm(val) for col, val in row.items() if _norm(val)})
+            )
+    if not marker_rows:
+        preview: list[str] = []
+        for row_no in sorted(rows)[:6]:
+            a = _norm(rows[row_no].get("A", ""))
+            if a:
+                preview.append(a[:80])
+        tail = "; ".join(preview) if preview else "(пусто)"
+        return (
+            "нет таблицы сделок (строка «ПЛАНТАЦИЯ» и колонки 40–100). "
+            f"Начало файла: {tail}"
+        )
+
+    row_no, cols = marker_rows[0]
+    col_preview = ", ".join(f"{c}={v!r}" for c, v in sorted(cols.items())[:10])
+    return (
+        f"строка заголовка есть (строка {row_no}), но нет колонок длин 40–100. "
+        f"Заголовок: {col_preview}"
+    )
+
+
 def biflorica_deals_header_or_raise(
     rows: dict[int, dict[str, str]],
     *,
@@ -119,13 +176,7 @@ def biflorica_deals_header_or_raise(
 
 
 def is_biflorica_deals_report(path: Path) -> bool:
-    try:
-        rows = grid_by_row(read_xlsx_grid(path))
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile):
-        return False
-    if not rows:
-        return False
-    return find_biflorica_deals_header(rows) is not None
+    return diagnose_biflorica_report(path) is None
 
 
 def _find_header_row(rows: dict[int, dict[str, str]]) -> int:
@@ -174,15 +225,18 @@ def find_latest_biflorica_report(download_dir: Path) -> Path:
     )
     checked: list[str] = []
     for path in files:
-        if is_biflorica_deals_report(path):
+        reason = diagnose_biflorica_report(path)
+        if reason is None:
             return path.resolve()
-        checked.append(path.name)
-    preview = ", ".join(checked[:5])
-    if len(checked) > 5:
-        preview += f" … (+{len(checked) - 5})"
+        checked.append(f"{path.name} ({reason})")
+    preview = "; ".join(checked[:3])
+    if len(checked) > 3:
+        preview += f" … (+{len(checked) - 3})"
     raise FileNotFoundError(
-        f"В {download_dir} нет пригодного отчёта Biflorica (таблица «ПЛАНТАЦИЯ» + длины). "
-        f"Проверены: {preview}. Скачайте свежий BiFlorica-*.xlsx."
+        f"В {download_dir} нет пригодного отчёта Biflorica. "
+        f"Проверены: {preview}. "
+        "Нужен полный BiFlorica-*.xlsx со строкой «ПЛАНТАЦИЯ» и колонками 40–100 — "
+        "скачайте заново кнопкой Biflorica (не «… Роза.xlsx» / «… Гипсофила.xlsx»)."
     )
 
 

@@ -532,6 +532,15 @@ async def run_biflorica_job(
                 )
                 existing = dest if dest.exists() else legacy_dest
                 if existing.exists() and existing.stat().st_size > 0:
+                    from cvetopt.invoice.biflorica_split import diagnose_biflorica_report
+
+                    bad = diagnose_biflorica_report(existing)
+                    if bad:
+                        await lg(
+                            f"Файл {existing.name} в папке не подходит: {bad}. "
+                            "Удалите его и скачайте заново."
+                        )
+                        continue
                     await lg(f"Файл уже есть, добавляю в реестр: {existing.name}")
                     registry.add(order.order_id)
                     downloaded_ids.add(order.order_id)
@@ -548,6 +557,20 @@ async def run_biflorica_job(
                 except Exception as e:
                     await lg(f"Ошибка скачивания {order.order_id}: {e}")
                     logger.exception("download failed")
+                    continue
+
+                from cvetopt.invoice.biflorica_split import diagnose_biflorica_report
+
+                bad = diagnose_biflorica_report(dest)
+                if bad:
+                    await lg(
+                        f"Скачанный файл не похож на отчёт сделок ({dest.name}): {bad}. "
+                        "Файл удалён — проверьте заказ на сайте и скачайте вручную."
+                    )
+                    try:
+                        dest.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                     continue
 
                 registry.add(order.order_id)
