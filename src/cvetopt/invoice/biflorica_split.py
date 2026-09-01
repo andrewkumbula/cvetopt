@@ -20,7 +20,7 @@ import xlrd
 from openpyxl import load_workbook
 
 from cvetopt.core.runtime_settings import BIFLORICA_DOWNLOAD_PREFIX, order_id_from_biflorica_report
-from cvetopt.invoice.xlsx_read import ensure_xlsx_workbook, grid_by_row, read_excel_grid
+from cvetopt.invoice.xlsx_read import ensure_xlsx_workbook, excel_grid_stats, grid_by_row, read_excel_grid
 
 LogFn = Callable[[str], None]
 
@@ -127,7 +127,7 @@ def diagnose_biflorica_report(path: Path) -> str | None:
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, xlrd.XLRDError) as exc:
         return f"не удалось прочитать: {exc}"
     if not rows:
-        return "пустой лист Excel"
+        return f"пустой лист Excel ({excel_grid_stats(path)})"
     if find_biflorica_deals_header(rows) is not None:
         return None
 
