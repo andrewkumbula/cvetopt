@@ -378,6 +378,23 @@
         Дописывать в словарь новые названия без перевода (колонка B, C пустая).
         Служебные строки инвойса (fees, box, коды) не дописываются.
       </label>
+      <label for="holland_skip_descriptions" class="muted" style="display:block;margin:0.75rem 0 0.25rem 0;">
+        Перевод: не трогать эти фразы (одна на строку):
+      </label>
+      <textarea
+        id="holland_skip_descriptions"
+        name="holland_skip_descriptions"
+        rows="6"
+        spellcheck="false"
+        class="input-path"
+        style="width:100%;max-width:42rem;font-family:ui-monospace,monospace;font-size:0.85rem;resize:vertical;"
+        placeholder="Carnations&#10;box *&#10;~administration"
+      >{{ runtime_settings.holland_skip_descriptions|default('') }}</textarea>
+      <p class="muted" style="margin:0.25rem 0 0 0;font-size:0.85rem;max-width:42rem;">
+        Точное совпадение; <code>текст*</code> — начинается с; <code>~текст</code> — содержит;
+        <code>#</code> — комментарий. Плюс встроенный фильтр (fees, box, Cargo…).
+        Не переводит и не дописывает в словарь.
+      </p>
       <label for="holland_sklad_dir" class="muted">Перевод, папка Голландия_1_*.xlsx:</label>
       <div class="path-row">
         <input
@@ -808,6 +825,7 @@
     const autoNewWorkbookInput = document.getElementById("auto_new_workbook");
     const hollandDictionaryInput = document.getElementById("holland_dictionary");
     const hollandAppendMissingInput = document.getElementById("holland_append_missing");
+    const hollandSkipDescriptionsInput = document.getElementById("holland_skip_descriptions");
     const hollandSkladDirInput = document.getElementById("holland_sklad_dir");
     const ecuadorTemplateInput = document.getElementById("ecuador_template");
     const ecuadorOutputInput = document.getElementById("ecuador_output");
@@ -1014,7 +1032,7 @@
       });
     }
 
-    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && mailArchiveDirInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && hollandDictionaryInput && hollandAppendMissingInput && hollandSkladDirInput && ecuadorTemplateInput && ecuadorOutputInput && ecuadorArchiveInput) {
+    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && mailArchiveDirInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && hollandDictionaryInput && hollandAppendMissingInput && hollandSkipDescriptionsInput && hollandSkladDirInput && ecuadorTemplateInput && ecuadorOutputInput && ecuadorArchiveInput) {
       const parseDays = (input, fallback) => {
         const n = Number.parseInt(input.value, 10);
         return Number.isFinite(n) ? n : fallback;
@@ -1028,6 +1046,7 @@
           auto_new_workbook_path: autoNewWorkbookInput.value.trim(),
           holland_dictionary_path: hollandDictionaryInput.value.trim(),
           holland_append_missing_to_dictionary: hollandAppendMissingInput.checked,
+          holland_skip_descriptions: hollandSkipDescriptionsInput.value,
           holland_sklad_output_dir: hollandSkladDirInput.value.trim(),
           ecuador_template_path: ecuadorTemplateInput.value.trim(),
           ecuador_output_dir: ecuadorOutputInput.value.trim(),

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cvetopt.invoice.description_dictionary import (
+    SkipDescriptionRules,
+    SKIP_DESCRIPTION_RULES_EMPTY,
     append_missing_descriptions,
     is_holland_product_description,
     load_description_dictionary,
@@ -109,8 +111,11 @@ def _already_has_rostovka(name: str, length: str) -> bool:
     return bool(tokens) and tokens[-1] == length
 
 
-def _is_data_description(text: str) -> bool:
-    return is_holland_product_description(text)
+def _should_process_description(
+    text: str,
+    skip_rules: SkipDescriptionRules,
+) -> bool:
+    return is_holland_product_description(text, extra=skip_rules)
 
 
 @dataclass(frozen=True)
@@ -190,6 +195,8 @@ def _plan_updates_xls(
     sheet: object,
     layout: MailFileLayout,
     dictionary: dict[str, str],
+    *,
+    skip_rules: SkipDescriptionRules = SKIP_DESCRIPTION_RULES_EMPTY,
 ) -> tuple[dict[int, str], list[str], int, int, int]:
     """row → новое Description; missing texts; translated; roses; total."""
     updates: dict[int, str] = {}
@@ -201,7 +208,7 @@ def _plan_updates_xls(
         if row in layout.header_rows:
             continue
         raw = _cell_str(sheet, row, layout.desc_col)
-        if not _is_data_description(raw):
+        if not _should_process_description(raw, skip_rules):
             continue
         total += 1
         new_text, exact, any_hit = translate_description(dictionary, raw)
@@ -246,6 +253,8 @@ def _apply_xls_updates(path: Path, desc_col: int, updates: dict[int, str]) -> No
 def _plan_updates_xlsx(
     path: Path,
     dictionary: dict[str, str],
+    *,
+    skip_rules: SkipDescriptionRules = SKIP_DESCRIPTION_RULES_EMPTY,
 ) -> tuple[str, str, dict[str, str | None], list[str], int, int, int]:
     """desc_col, length_col letters, updates A1→value, missing, translated, roses, total."""
     grid = read_xlsx_grid(path)
@@ -286,7 +295,7 @@ def _plan_updates_xlsx(
             continue
         row = rows.get(row_n, {})
         raw = _norm(row.get(desc_col, ""))
-        if not _is_data_description(raw):
+        if not _should_process_description(raw, skip_rules):
             continue
         total += 1
         new_text, exact, any_hit = translate_description(dictionary, raw)
@@ -309,6 +318,7 @@ def process_mail_workbook(
     dictionary_path: Path,
     *,
     append_missing_to_dictionary: bool = True,
+    skip_rules: SkipDescriptionRules = SKIP_DESCRIPTION_RULES_EMPTY,
     log: LogFn | None = None,
 ) -> MailProcessResult:
     """Переводит Description in-place и добавляет ростовку всем розам."""
@@ -333,7 +343,7 @@ def process_mail_workbook(
                 f"S1={_col_letter(layout.length_col)}"
             )
             updates, missing, translated, roses, total = _plan_updates_xls(
-                sheet, layout, dictionary
+                sheet, layout, dictionary, skip_rules=skip_rules
             )
             if append_missing_to_dictionary and missing:
                 try:
@@ -341,6 +351,7 @@ def process_mail_workbook(
                         dictionary_path,
                         missing,
                         dictionary=dictionary,
+                        extra=skip_rules,
                         log=_lg,
                     )
                 except Exception as e:
@@ -355,7 +366,7 @@ def process_mail_workbook(
 
     if suffix in {".xlsx", ".xlsm"}:
         desc_col, length_col, updates, missing, translated, roses, total = (
-            _plan_updates_xlsx(path, dictionary)
+            _plan_updates_xlsx(path, dictionary, skip_rules=skip_rules)
         )
         _lg(f"{path.name}: Description={desc_col}, S1={length_col}")
         if append_missing_to_dictionary and missing:
@@ -364,6 +375,7 @@ def process_mail_workbook(
                     dictionary_path,
                     missing,
                     dictionary=dictionary,
+                    extra=skip_rules,
                     log=_lg,
                 )
             except Exception as e:
@@ -437,6 +449,7 @@ def process_mail_folders(
     dictionary_path: Path,
     *,
     append_missing_to_dictionary: bool = True,
+    skip_rules: SkipDescriptionRules = SKIP_DESCRIPTION_RULES_EMPTY,
     log: LogFn | None = None,
 ) -> tuple[MailProcessResult, MailProcessResult]:
     """Обрабатывает по одному файлу в папке 1 и папке 2."""
@@ -448,6 +461,7 @@ def process_mail_folders(
         f1,
         dictionary_path,
         append_missing_to_dictionary=append_missing_to_dictionary,
+        skip_rules=skip_rules,
         log=_lg,
     )
     _lg(f"Папка 2: {f2.name}")
@@ -455,6 +469,7 @@ def process_mail_folders(
         f2,
         dictionary_path,
         append_missing_to_dictionary=append_missing_to_dictionary,
+        skip_rules=skip_rules,
         log=_lg,
     )
     return r1, r2

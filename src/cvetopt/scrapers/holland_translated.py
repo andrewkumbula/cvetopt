@@ -8,6 +8,7 @@ from cvetopt.core.runtime_settings import (
     effective_auto_new_workbook_raw,
     effective_holland_append_missing,
     effective_holland_dictionary_raw,
+    effective_holland_skip_rules,
     load_runtime_settings,
     resolve_auto_new_workbook,
     resolve_holland_dictionary,
@@ -64,6 +65,9 @@ async def run_holland_translated_job(job_id: str, env: EnvSettings) -> None:
         except Exception:
             pass
 
+    skip_rules = effective_holland_skip_rules(
+        runtime, yaml_text=translate_cfg.skip_descriptions
+    )
     await job_log(job_id, "Переведено: перевод Description + ростовка у роз…")
     r1, r2 = await asyncio.to_thread(
         process_mail_folders,
@@ -71,6 +75,7 @@ async def run_holland_translated_job(job_id: str, env: EnvSettings) -> None:
         layout.long_dir,
         dict_path,
         append_missing_to_dictionary=effective_holland_append_missing(runtime),
+        skip_rules=skip_rules,
         log=_thread_log,
     )
     await job_log(

@@ -179,6 +179,8 @@ class HollandTranslateConfig(BaseModel):
     archive_previous_on_auto1: bool = True
     # Без перевода в словаре — дописать Description в колонку B (C пустая).
     append_missing_to_dictionary: bool = True
+    # Доп. фразы, которые не переводить (по одной на строку; см. parse_skip_descriptions_text).
+    skip_descriptions: str = ""
     # После выгрузки — слева A–B с красным/зелёным квадратом (как Эквадор) + макрос клика.
     add_row_markers: bool = True
 

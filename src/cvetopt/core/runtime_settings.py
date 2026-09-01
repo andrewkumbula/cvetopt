@@ -80,6 +80,7 @@ class RuntimeSettings(BaseModel):
     holland_dictionary_path: str = Field(default=DEFAULT_HOLLAND_DICTIONARY)
     holland_sklad_output_dir: str = Field(default=DEFAULT_HOLLAND_SKLAD_DIR)
     holland_append_missing_to_dictionary: bool = True
+    holland_skip_descriptions: str = ""
 
 
 def _settings_path(env: EnvSettings) -> Path:
@@ -106,6 +107,7 @@ def default_runtime_settings(env: EnvSettings) -> RuntimeSettings:
         holland_dictionary_path=yaml_cfg.holland_translate.dictionary_path,
         holland_sklad_output_dir=yaml_cfg.holland_translate.sklad_output_dir,
         holland_append_missing_to_dictionary=yaml_cfg.holland_translate.append_missing_to_dictionary,
+        holland_skip_descriptions=yaml_cfg.holland_translate.skip_descriptions,
     )
 
 
@@ -326,6 +328,16 @@ def effective_holland_sklad_dir_raw(
 def effective_holland_append_missing(runtime: RuntimeSettings) -> bool:
     """Дописывать в словарь Description без перевода (настройка UI / runtime)."""
     return runtime.holland_append_missing_to_dictionary
+
+
+def effective_holland_skip_rules(runtime: RuntimeSettings, *, yaml_text: str = ""):
+    """Правила пропуска Description из Настроек (дополняют встроенный фильтр)."""
+    from cvetopt.invoice.description_dictionary import parse_skip_descriptions_text
+
+    raw = (runtime.holland_skip_descriptions or "").strip()
+    if not raw:
+        raw = (yaml_text or "").strip()
+    return parse_skip_descriptions_text(raw)
 
 
 def validate_holland_translate_paths(

@@ -4,6 +4,7 @@ import re
 import shutil
 import sys
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import xlrd
@@ -74,6 +75,62 @@ _ORDER_CODE_RE = re.compile(
 )
 _ONLY_CODE_CHARS_RE = re.compile(r"^[\d\s./_\-]+$")
 
+
+@dataclass(frozen=True)
+class SkipDescriptionRules:
+    """Дополнительные фразы из Настроек — не переводить и не дописывать в словарь."""
+
+    exact: frozenset[str] = frozenset()
+    prefixes: tuple[str, ...] = ()
+    contains: tuple[str, ...] = ()
+
+
+SKIP_DESCRIPTION_RULES_EMPTY = SkipDescriptionRules()
+
+
+def parse_skip_descriptions_text(raw: str) -> SkipDescriptionRules:
+    """
+    Одна фраза на строку (из UI Настроек):
+    - точное совпадение (без учёта регистра);
+    - «текст*» — строка начинается с «текст»;
+    - «~текст» — строка содержит «текст»;
+    - строки с # в начале — комментарий.
+    """
+    exact: set[str] = set()
+    prefixes: list[str] = []
+    contains: list[str] = []
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("~"):
+            token = line[1:].strip().casefold()
+            if token:
+                contains.append(token)
+            continue
+        if line.endswith("*"):
+            token = line[:-1].strip().casefold()
+            if token:
+                prefixes.append(token)
+            continue
+        exact.add(line.casefold())
+    return SkipDescriptionRules(
+        frozenset(exact),
+        tuple(prefixes),
+        tuple(contains),
+    )
+
+
+def _matches_skip_rules(folded: str, rules: SkipDescriptionRules) -> bool:
+    if folded in rules.exact:
+        return True
+    if any(folded.startswith(p) for p in rules.prefixes):
+        return True
+    if any(c in folded for c in rules.contains):
+        return True
+    return False
+
+
 _HEADER_HINTS = frozenset(
     {
         "description",
@@ -96,7 +153,11 @@ def _norm_key(text: str) -> str:
     return " ".join(str(text or "").split()).strip()
 
 
-def is_holland_product_description(text: str) -> bool:
+def is_holland_product_description(
+    text: str,
+    *,
+    extra: SkipDescriptionRules | None = None,
+) -> bool:
     """
     Строка Description из инвойса — товар/сорт (переводим и можно дописать в словарь).
     False для fees, box, кодов заказа, итогов и прочего служебного текста.
@@ -105,6 +166,8 @@ def is_holland_product_description(text: str) -> bool:
     if not key:
         return False
     folded = key.casefold()
+    if extra is not None and _matches_skip_rules(folded, extra):
+        return False
     if folded in _NON_PRODUCT_EXACT:
         return False
     for prefix in _NON_PRODUCT_PREFIXES:
@@ -362,6 +425,8 @@ def _unique_missing_descriptions(
     descriptions: Iterable[str],
     dictionary: dict[str, str],
     existing_keys: set[str],
+    *,
+    extra: SkipDescriptionRules | None = None,
 ) -> tuple[list[str], int]:
     translated_folded = {k.casefold() for k in dictionary}
     out: list[str] = []
@@ -371,7 +436,7 @@ def _unique_missing_descriptions(
         key = _norm_key(raw)
         if not key:
             continue
-        if not is_holland_product_description(key):
+        if not is_holland_product_description(key, extra=extra):
             skipped_non_product += 1
             continue
         folded = key.casefold()
@@ -446,6 +511,7 @@ def append_missing_descriptions(
     descriptions: Iterable[str],
     *,
     dictionary: dict[str, str] | None = None,
+    extra: SkipDescriptionRules | None = None,
     log: LogFn | None = None,
 ) -> int:
     """
@@ -458,7 +524,9 @@ def append_missing_descriptions(
 
     dict_map = dictionary if dictionary is not None else load_description_dictionary(path)
     existing_keys = load_dictionary_english_keys(path)
-    to_add, skipped = _unique_missing_descriptions(descriptions, dict_map, existing_keys)
+    to_add, skipped = _unique_missing_descriptions(
+        descriptions, dict_map, existing_keys, extra=extra
+    )
     if log is not None and skipped:
         log(
             f"Словарь: пропущено {skipped} служебных строк "

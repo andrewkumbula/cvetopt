@@ -96,6 +96,8 @@ holland_translate:
   sklad_output_dir: "C:\\Инвойсы склад"
   archive_previous_on_auto1: true
   append_missing_to_dictionary: true
+  # Доп. фразы для пропуска (одна на строку); в UI «Настройки» перекрывает.
+  skip_descriptions: ""
   # После выгрузки — слева 2 столбца с красным/зелёным квадратом (как Эквадор) и
   # макрос клика (красный — строка краснеет, зелёный — зеленеет). Данные не меняются.
   add_row_markers: true

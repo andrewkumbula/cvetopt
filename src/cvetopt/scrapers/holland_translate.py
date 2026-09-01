@@ -7,6 +7,7 @@ from cvetopt.core.job_manager import job_log
 from cvetopt.core.runtime_settings import (
     effective_holland_append_missing,
     effective_holland_dictionary_raw,
+    effective_holland_skip_rules,
     effective_holland_sklad_dir_raw,
     load_runtime_settings,
     resolve_ecuador_template,
@@ -48,12 +49,16 @@ async def run_holland_translate_job(job_id: str, env: EnvSettings) -> None:
         if cfg.add_row_markers
         else None
     )
+    skip_rules = effective_holland_skip_rules(
+        runtime, yaml_text=cfg.skip_descriptions
+    )
     export_path = await asyncio.to_thread(
         postprocess_holland_after_auto1,
         sklad_output_dir=sklad_dir,
         dictionary_path=dict_path,
         on_date=date.today(),
         append_missing_to_dictionary=effective_holland_append_missing(runtime),
+        skip_rules=skip_rules,
         add_row_markers=cfg.add_row_markers,
         marker_assets_dir=marker_assets,
         log=_thread_log,

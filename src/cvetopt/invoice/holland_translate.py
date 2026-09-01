@@ -10,6 +10,8 @@ from pathlib import Path
 from cvetopt.core.runtime_settings import _archive_one_entry, _archive_target_path
 
 from cvetopt.invoice.description_dictionary import (
+    SkipDescriptionRules,
+    SKIP_DESCRIPTION_RULES_EMPTY,
     append_missing_descriptions,
     is_holland_product_description,
     load_description_dictionary,
@@ -152,6 +154,7 @@ def _build_translation_plan(
     export_path: Path,
     dictionary: dict[str, str],
     *,
+    skip_rules: SkipDescriptionRules = SKIP_DESCRIPTION_RULES_EMPTY,
     log: LogFn,
 ) -> tuple[str, str, dict[str, str | None], list[str], int, int, int]:
     grid = read_xlsx_grid(export_path)
@@ -174,7 +177,7 @@ def _build_translation_plan(
     for row_n in range(2, max_row + 1):
         row = rows.get(row_n, {})
         text = _norm_cell(row.get(desc_col, ""))
-        if not text or not is_holland_product_description(text):
+        if not text or not is_holland_product_description(text, extra=skip_rules):
             continue
         total += 1
         result, exact, any_hit = translate_description(dictionary, text)
@@ -246,6 +249,7 @@ def translate_holland_export(
     dictionary_path: Path,
     *,
     append_missing_to_dictionary: bool = True,
+    skip_rules: SkipDescriptionRules = SKIP_DESCRIPTION_RULES_EMPTY,
     log: LogFn | None = None,
 ) -> tuple[int, int, int]:
     """
@@ -261,7 +265,7 @@ def translate_holland_export(
     _lg(f"Словарь: {len(dictionary)} записей из {dictionary_path.name}")
 
     _desc_col, trans_col, updates, missing_texts, translated, missing, total = (
-        _build_translation_plan(export_path, dictionary, log=_lg)
+        _build_translation_plan(export_path, dictionary, skip_rules=skip_rules, log=_lg)
     )
 
     if append_missing_to_dictionary and missing_texts:
@@ -270,6 +274,7 @@ def translate_holland_export(
                 dictionary_path,
                 missing_texts,
                 dictionary=dictionary,
+                extra=skip_rules,
                 log=_lg,
             )
         except Exception as e:
@@ -306,6 +311,7 @@ def postprocess_holland_after_auto1(
     dictionary_path: Path,
     on_date: date | None = None,
     append_missing_to_dictionary: bool = True,
+    skip_rules: SkipDescriptionRules = SKIP_DESCRIPTION_RULES_EMPTY,
     add_row_markers: bool = False,
     marker_assets_dir: Path | None = None,
     log: LogFn | None = None,
@@ -320,6 +326,7 @@ def postprocess_holland_after_auto1(
         export_file,
         dictionary_path,
         append_missing_to_dictionary=append_missing_to_dictionary,
+        skip_rules=skip_rules,
         log=_lg,
     )
     if add_row_markers and marker_assets_dir is not None:
