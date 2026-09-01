@@ -204,8 +204,124 @@ def _is_mix_rose(typ: str, variety: str) -> bool:
     v = _norm(variety).casefold()
     if "роз" not in t:
         return False
-    # Сорт ровно Mix (не MixAlstromeria и т.п.)
-    return v == "mix"
+    # Сорт Mix / Микс (не MixAlstromeria и т.п.)
+    return v in {"mix", "микс"}
+
+
+def _priced_length_labels(
+    cells: dict[str, str],
+    length_map: dict[str, str],
+) -> list[str]:
+    labels: list[tuple[int, str]] = []
+    for lab, col in length_map.items():
+        price = _as_float(cells.get(col, ""))
+        if price is not None and price > 0:
+            labels.append((_col_to_index(col), lab))
+    labels.sort()
+    return [lab for _, lab in labels]
+
+
+def _stems_for_length(
+    cells: dict[str, str],
+    length: str,
+    length_map: dict[str, str],
+) -> int:
+    """Стебли строки для одной длины (учёт «75|25» при нескольких ценах)."""
+    priced = _priced_length_labels(cells, length_map)
+    if length not in priced:
+        return 0
+    o_raw = _norm(cells.get("O", ""))
+    if not o_raw:
+        return 0
+    if len(priced) == 1:
+        return _as_qty(o_raw)
+    parts = [p.strip() for p in o_raw.split("|")]
+    if len(parts) == len(priced):
+        return _as_qty(parts[priced.index(length)])
+    if priced[0] == length:
+        return _as_qty(o_raw)
+    return 0
+
+
+@dataclass(frozen=True)
+class MixPoolRow:
+    row_no: int
+    plantation: str
+    price: float
+    stems: int
+
+
+def scan_mix_pool(
+    rows: dict[int, dict[str, str]],
+    header_row: int,
+    length_map: dict[str, str],
+    length: str,
+) -> list[MixPoolRow]:
+    price_col = length_map.get(length)
+    if not price_col:
+        return []
+    pool: list[MixPoolRow] = []
+    for row_no in sorted(rows):
+        if row_no <= header_row:
+            continue
+        cells = rows[row_no]
+        if not _is_mix_rose(cells.get("C", ""), cells.get("D", "")):
+            continue
+        price = _as_float(cells.get(price_col, ""))
+        if price is None or price <= 0:
+            continue
+        stems = _stems_for_length(cells, length, length_map)
+        if stems <= 0:
+            continue
+        pool.append(
+            MixPoolRow(
+                row_no=row_no,
+                plantation=_norm(cells.get("B", "")),
+                price=price,
+                stems=stems,
+            )
+        )
+    return pool
+
+
+def log_mix_capacity(
+    demand: TemplateDemand,
+    biflorica_path: Path,
+    rows: dict[int, dict[str, str]],
+    header_row: int,
+    length_map: dict[str, str],
+    *,
+    log: LogFn | None = None,
+) -> None:
+    _lg = log or _default_log
+    try:
+        st = biflorica_path.stat()
+        mtime = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+        _lg(
+            f"Миксы: Biflorica {biflorica_path.name} "
+            f"({st.st_size} байт, изменён {mtime})"
+        )
+    except OSError:
+        _lg(f"Миксы: Biflorica {biflorica_path.name}")
+    _lg(f"Миксы: шаблон {demand.path.name}, нужно {demand.totals}")
+    for length in _TARGET_LENGTHS:
+        need = demand.totals.get(length, 0)
+        if need <= 0:
+            continue
+        pool = scan_mix_pool(rows, header_row, length_map, length)
+        available = sum(r.stems for r in pool)
+        _lg(f"Миксы: в файле Mix {length} см — {available} шт ({len(pool)} строк)")
+        for row in pool:
+            plant = row.plantation or "-"
+            _lg(
+                f"Миксы:   строка {row.row_no} {plant}: "
+                f"{row.stems} шт × {row.price:.4f}"
+            )
+        if available < need:
+            _lg(
+                f"Миксы: ⚠ не хватает {need - available} шт на {length} см "
+                f"(нужно {need}, есть {available})"
+            )
 
 
 def plan_mix_allocation(
@@ -237,20 +353,10 @@ def plan_mix_allocation(
             raise RuntimeError(f"В Biflorica нет колонки длины {length}")
 
         candidates: list[tuple[float, int, int, str, float]] = []
-        # (price, available_qty, row, plantation, price)
-        for row_no, cells in rows.items():
-            if row_no <= header_row:
-                continue
-            if not _is_mix_rose(cells.get("C", ""), cells.get("D", "")):
-                continue
-            price = _as_float(cells.get(price_col, ""))
-            if price is None or price <= 0:
-                continue
-            avail = _as_qty(cells.get("O", ""))
-            if avail <= 0:
-                continue
+        pool = scan_mix_pool(rows, header_row, length_map, length)
+        for row in pool:
             candidates.append(
-                (price, avail, row_no, _norm(cells.get("B", "")), price)
+                (row.price, row.stems, row.row_no, row.plantation, row.price)
             )
         candidates.sort(key=lambda x: (-x[0], x[2]))  # дорогие сначала
 
@@ -272,17 +378,21 @@ def plan_mix_allocation(
             left -= take
 
         if left > 0:
+            rows_hint = "; ".join(
+                f"#{r.row_no} {r.plantation or '-'}:{r.stems}"
+                for r in pool[:8]
+            )
+            if len(pool) > 8:
+                rows_hint += f" … (+{len(pool) - 8})"
             hint = ""
             if available > 0 and available < need:
                 hint = (
-                    " Похоже, миксы уже запускали на этом файле: удалили только новые "
-                    "строки внизу, а исходные Mix уже списаны. Восстановите "
-                    f"«{biflorica_path.name}» из копии «… до миксов ….xlsx» "
-                    "в той же папке (или скачайте Biflorica заново) и запустите снова."
+                    " Если миксы уже запускали — восстановите файл из «… до миксов ….xlsx» "
+                    "или скачайте Biflorica заново и убедитесь, что в папке один свежий файл."
                 )
             raise RuntimeError(
                 f"Миксы: для длины {length} нужно {need}, в Biflorica Mix есть "
-                f"только {available} (не хватает {left}).{hint}"
+                f"только {available} (не хватает {left}). Строки Mix: {rows_hint}.{hint}"
             )
 
         total_stems = sum(t.take_qty for t in takes)
@@ -456,6 +566,16 @@ def run_mix_separation(
     _lg(
         f"Миксы: шаблон {demand.path.name}, строк={len(demand.lines)}, "
         f"итоги={demand.totals}"
+    )
+    rows = grid_by_row(read_excel_grid(biflorica_path))
+    header_row, length_map = _biflorica_header(rows, biflorica_path)
+    log_mix_capacity(
+        demand,
+        biflorica_path,
+        rows,
+        header_row,
+        length_map,
+        log=_lg,
     )
     plans = plan_mix_allocation(demand, biflorica_path, log=_lg)
     if not plans:
