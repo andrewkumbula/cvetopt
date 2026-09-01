@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import re
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -17,7 +19,12 @@ from cvetopt.invoice.biflorica_split import (
     find_latest_biflorica_report,
     is_split_output_name,
 )
-from cvetopt.invoice.xlsx_read import ensure_xlsx_workbook, grid_by_row, read_excel_grid
+from cvetopt.invoice.xlsx_read import (
+    ensure_xlsx_workbook,
+    grid_by_row,
+    pick_data_worksheet,
+    read_excel_grid,
+)
 
 LogFn = Callable[[str], None]
 
@@ -283,8 +290,25 @@ def plan_mix_allocation(
             f"Миксы: {length} см — need={need}, позиций={len(filled)}, "
             f"источников Mix={len(takes)}, avg={avg:.4f}"
         )
+        for t in takes:
+            _lg(
+                f"Миксы: {length} см ← строка {t.bif_row} "
+                f"{t.plantation or '(без плантации)'}: {t.take_qty} шт × {t.price:.4f}"
+            )
+        _lg(
+            f"Миксы: {length} см — проверка: сумма взятого {total_stems} шт, "
+            f"стоимость {sum(t.take_qty * t.price for t in takes):.2f}"
+        )
 
     return plans
+
+
+def backup_biflorica_before_mixes(path: Path) -> Path:
+    """Копия «<имя> до миксов ГГГГ-ММ-ДД ЧЧММСС.xlsx» рядом с файлом."""
+    stamp = datetime.now().strftime("%Y-%m-%d %H%M%S")
+    backup = path.with_name(f"{path.stem} до миксов {stamp}{path.suffix}")
+    shutil.copy2(path, backup)
+    return backup
 
 
 def apply_mix_plans_to_biflorica(
@@ -301,8 +325,10 @@ def apply_mix_plans_to_biflorica(
     """
     _lg = log or _default_log
     path = ensure_xlsx_workbook(biflorica_path.resolve())
+    backup = backup_biflorica_before_mixes(path)
+    _lg(f"Миксы: резервная копия → {backup.name}")
     wb = load_workbook(path)
-    ws = wb.worksheets[0]
+    ws = pick_data_worksheet(wb)
 
     # карта: длина → индекс колонки 1-based
     rows_grid = grid_by_row(read_excel_grid(path))

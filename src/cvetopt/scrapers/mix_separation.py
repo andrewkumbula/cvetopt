@@ -75,4 +75,21 @@ async def run_mix_separation_job(
         job_id,
         f"Миксы: готово — шаблон {tpl_out.name}, Biflorica {bif_out.name}; {summary}",
     )
+    await job_log(job_id, "Миксы: как проверить результат —")
+    for plan in plans:
+        stems = sum(t.take_qty for t in plan.takes)
+        cost = sum(t.take_qty * t.price for t in plan.takes)
+        codes = ", ".join(f"{ln.code}×{ln.qtys.get(plan.length, 0)}" for ln in plan.lines)
+        await job_log(
+            job_id,
+            f"Миксы: {plan.length} см — из шаблона {plan.need} шт, "
+            f"списано с Mix {stems} шт на {cost:.2f}, средняя {plan.avg_price:.4f}",
+        )
+        await job_log(job_id, f"Миксы: {plan.length} см — новые строки: {codes}")
+    await job_log(
+        job_id,
+        "Миксы: в Biflorica проверьте — новые строки внизу без плантации, "
+        "кол-во совпадает с шаблоном, цена одна на всю длину. "
+        "Файл «… до миксов ….xlsx» рядом — копия до правок.",
+    )
     await job_log(job_id, "Готово.")

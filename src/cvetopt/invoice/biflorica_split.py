@@ -20,11 +20,18 @@ import xlrd
 from openpyxl import load_workbook
 
 from cvetopt.core.runtime_settings import BIFLORICA_DOWNLOAD_PREFIX, order_id_from_biflorica_report
-from cvetopt.invoice.xlsx_read import ensure_xlsx_workbook, excel_grid_stats, grid_by_row, read_excel_grid
+from cvetopt.invoice.xlsx_read import (
+    ensure_xlsx_workbook,
+    excel_grid_stats,
+    grid_by_row,
+    pick_data_worksheet,
+    read_excel_grid,
+)
 
 LogFn = Callable[[str], None]
 
 _SPLIT_SUFFIXES = ("Гипсофила", "Роза", "Прочее", "Гортензия")
+BACKUP_MARKER = "до миксов"
 _BIFLORICA_LENGTHS = frozenset({"40", "50", "60", "70", "80", "90", "100", "100+"})
 _TYPE_COL = "C"
 _DATA_FIRST_FALLBACK = 7
@@ -40,8 +47,10 @@ def _norm(text: object) -> str:
 
 
 def is_split_output_name(name: str) -> bool:
-    """Уже разделённый файл: «… Гипсофила.xlsx» / «… Роза.xlsx»."""
+    """Уже разделённый файл или резервная копия: «… Роза.xlsx», «… до миксов ….xlsx»."""
     stem = Path(name).stem
+    if BACKUP_MARKER in stem.casefold():
+        return True
     for suf in _SPLIT_SUFFIXES:
         if stem.endswith(f" {suf}") or stem.casefold().endswith(f" {suf.casefold()}"):
             return True
@@ -313,7 +322,7 @@ def _filter_workbook_rows(
 ) -> None:
     """Удаляет строки данных, не входящие в keep_data_rows (1-based)."""
     wb = load_workbook(path)
-    ws = wb.worksheets[0]
+    ws = pick_data_worksheet(wb)
     # Удаляем снизу вверх, чтобы индексы не съезжали.
     max_row = ws.max_row or header_row
     for row_no in range(max_row, header_row, -1):

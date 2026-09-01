@@ -217,6 +217,29 @@ def excel_grid_stats(path: Path) -> str:
         return f"{size} байт, формат {kind}, ошибка чтения: {exc}"
 
 
+def pick_data_worksheet(wb: object) -> object:
+    """Лист с таблицей «ПЛАНТАЦИЯ»; иначе самый заполненный."""
+    sheets = list(wb.worksheets)  # type: ignore[attr-defined]
+    best = None
+    best_cells = -1
+    for ws in sheets:
+        cells = 0
+        marker = False
+        for row in ws.iter_rows():
+            for cell in row:
+                text = _cell_to_text(cell.value)
+                if not text:
+                    continue
+                cells += 1
+                if _BIFLORICA_MARKER in text.casefold():
+                    marker = True
+        if marker:
+            return ws
+        if cells > best_cells:
+            best, best_cells = ws, cells
+    return best if best is not None else sheets[0]
+
+
 def ensure_xlsx_workbook(path: Path) -> Path:
     """
     Если файл — старый .xls (даже с расширением .xlsx), пересохраняет как настоящий .xlsx.
