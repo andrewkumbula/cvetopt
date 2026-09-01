@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from collections.abc import Callable, Iterable
@@ -17,6 +18,46 @@ _DICT_COL_EN = 1  # B, 0-based
 _DICT_COL_RU = 2  # C, 0-based
 _DICT_COL_EN_LETTER = "B"
 _DICT_COL_RU_LETTER = "C"
+
+# Служебные строки инвойса Enigma — не сорта, не дописываем в словарь.
+_NON_PRODUCT_EXACT = frozenset(
+    {
+        "description",
+        "subtotal",
+        "total",
+        "total in",
+        "total out",
+        "artnr",
+        "art nr",
+        "art nr.",
+        "box nr.",
+        "box nr",
+        "package",
+        "packages",
+        "others",
+        "other",
+        "enigma flowers",
+    }
+)
+_NON_PRODUCT_PREFIXES = (
+    "subtotal",
+    "administration",
+    "declaration",
+    "temp tale",
+    "box ",
+    "total ",
+)
+_NON_PRODUCT_CONTAINS = (
+    " fees",
+    " fee",
+    " costs",
+    " cost",
+)
+_ORDER_CODE_RE = re.compile(
+    r"^(\d{5,}|\d+\s*/\s*[A-Z0-9]+\s*-\s*\d{6,}|[A-Z]{2,}\d{2,}\s*-\s*\d{6,})",
+    re.IGNORECASE,
+)
+_ONLY_CODE_CHARS_RE = re.compile(r"^[\d\s./_\-]+$")
 
 _HEADER_HINTS = frozenset(
     {
@@ -38,6 +79,35 @@ _HEADER_HINTS = frozenset(
 
 def _norm_key(text: str) -> str:
     return " ".join(str(text or "").split()).strip()
+
+
+def is_holland_product_description(text: str) -> bool:
+    """
+    Строка Description из инвойса — товар/сорт (переводим и можно дописать в словарь).
+    False для fees, box, кодов заказа, итогов и прочего служебного текста.
+    """
+    key = _norm_key(text)
+    if not key:
+        return False
+    folded = key.casefold()
+    if folded in _NON_PRODUCT_EXACT:
+        return False
+    for prefix in _NON_PRODUCT_PREFIXES:
+        if folded.startswith(prefix):
+            return False
+    padded = f" {folded}"
+    if any(token in padded for token in _NON_PRODUCT_CONTAINS):
+        return False
+    if _ORDER_CODE_RE.match(key):
+        return False
+    if "fmyx" in folded:
+        return False
+    compact = folded.replace(" ", "")
+    if len(compact) >= 10 and compact.isalnum() and not any(c.islower() for c in key if c.isalpha()):
+        return False
+    if _ONLY_CODE_CHARS_RE.match(key) and any(ch.isdigit() for ch in key):
+        return False
+    return True
 
 
 def _is_header_row(a: str, b: str) -> bool:
@@ -277,20 +347,24 @@ def _unique_missing_descriptions(
     descriptions: Iterable[str],
     dictionary: dict[str, str],
     existing_keys: set[str],
-) -> list[str]:
+) -> tuple[list[str], int]:
     translated_folded = {k.casefold() for k in dictionary}
     out: list[str] = []
     seen: set[str] = set()
+    skipped_non_product = 0
     for raw in descriptions:
         key = _norm_key(raw)
         if not key:
+            continue
+        if not is_holland_product_description(key):
+            skipped_non_product += 1
             continue
         folded = key.casefold()
         if folded in seen or folded in translated_folded or folded in existing_keys:
             continue
         seen.add(folded)
         out.append(key)
-    return sorted(out, key=str.casefold)
+    return sorted(out, key=str.casefold), skipped_non_product
 
 
 def _dictionary_next_row(path: Path) -> int:
@@ -369,7 +443,12 @@ def append_missing_descriptions(
 
     dict_map = dictionary if dictionary is not None else load_description_dictionary(path)
     existing_keys = load_dictionary_english_keys(path)
-    to_add = _unique_missing_descriptions(descriptions, dict_map, existing_keys)
+    to_add, skipped = _unique_missing_descriptions(descriptions, dict_map, existing_keys)
+    if log is not None and skipped:
+        log(
+            f"Словарь: пропущено {skipped} служебных строк "
+            "(fees, box, коды заказа — не дописываем)"
+        )
     if not to_add:
         return 0
 

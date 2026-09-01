@@ -368,6 +368,16 @@
         />
         <button type="button" data-pick-target="holland_dictionary" data-pick-mode="file">Выбрать…</button>
       </div>
+      <label class="muted" style="display:block;margin:0.5rem 0 0 0;">
+        <input
+          type="checkbox"
+          id="holland_append_missing"
+          name="holland_append_missing_to_dictionary"
+          {% if runtime_settings.holland_append_missing_to_dictionary|default(true) %}checked{% endif %}
+        />
+        Дописывать в словарь новые названия без перевода (колонка B, C пустая).
+        Служебные строки инвойса (fees, box, коды) не дописываются.
+      </label>
       <label for="holland_sklad_dir" class="muted">Перевод, папка Голландия_1_*.xlsx:</label>
       <div class="path-row">
         <input
@@ -797,6 +807,7 @@
     const bifArchiveDirInput = document.getElementById("bif_archive_dir");
     const autoNewWorkbookInput = document.getElementById("auto_new_workbook");
     const hollandDictionaryInput = document.getElementById("holland_dictionary");
+    const hollandAppendMissingInput = document.getElementById("holland_append_missing");
     const hollandSkladDirInput = document.getElementById("holland_sklad_dir");
     const ecuadorTemplateInput = document.getElementById("ecuador_template");
     const ecuadorOutputInput = document.getElementById("ecuador_output");
@@ -1003,7 +1014,7 @@
       });
     }
 
-    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && mailArchiveDirInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && hollandDictionaryInput && hollandSkladDirInput && ecuadorTemplateInput && ecuadorOutputInput && ecuadorArchiveInput) {
+    if (saveSettingsBtn && saveSettingsMsg && bifMinInput && bifMaxInput && delmirLookbackInput && lookbackInput && mailShortMaxLenInput && mailDirShortInput && mailDirLongInput && mailArchiveDirInput && bifDownloadDirInput && bifArchiveDirInput && autoNewWorkbookInput && hollandDictionaryInput && hollandAppendMissingInput && hollandSkladDirInput && ecuadorTemplateInput && ecuadorOutputInput && ecuadorArchiveInput) {
       const parseDays = (input, fallback) => {
         const n = Number.parseInt(input.value, 10);
         return Number.isFinite(n) ? n : fallback;
@@ -1016,6 +1027,7 @@
           biflorica_archive_dir: bifArchiveDirInput.value.trim(),
           auto_new_workbook_path: autoNewWorkbookInput.value.trim(),
           holland_dictionary_path: hollandDictionaryInput.value.trim(),
+          holland_append_missing_to_dictionary: hollandAppendMissingInput.checked,
           holland_sklad_output_dir: hollandSkladDirInput.value.trim(),
           ecuador_template_path: ecuadorTemplateInput.value.trim(),
           ecuador_output_dir: ecuadorOutputInput.value.trim(),

@@ -6,6 +6,7 @@ import sys
 from cvetopt.core.job_manager import job_log
 from cvetopt.core.runtime_settings import (
     effective_auto_new_workbook_raw,
+    effective_holland_append_missing,
     effective_holland_dictionary_raw,
     load_runtime_settings,
     resolve_auto_new_workbook,
@@ -69,7 +70,7 @@ async def run_holland_translated_job(job_id: str, env: EnvSettings) -> None:
         layout.short_dir,
         layout.long_dir,
         dict_path,
-        append_missing_to_dictionary=translate_cfg.append_missing_to_dictionary,
+        append_missing_to_dictionary=effective_holland_append_missing(runtime),
         log=_thread_log,
     )
     await job_log(

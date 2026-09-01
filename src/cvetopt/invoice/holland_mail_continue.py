@@ -13,6 +13,7 @@ from pathlib import Path
 
 from cvetopt.invoice.description_dictionary import (
     append_missing_descriptions,
+    is_holland_product_description,
     load_description_dictionary,
     translate_description,
 )
@@ -24,16 +25,6 @@ LogFn = Callable[[str], None]
 
 _EXCEL_SUFFIXES = {".xls", ".xlsx", ".xlsm"}
 _CM_RE = re.compile(r"(?i)\s*(cm|см)\s*$")
-_NON_DATA_DESC = frozenset(
-    {
-        "description",
-        "subtotal",
-        "total",
-        "artnr",
-        "box nr.",
-        "box nr",
-    }
-)
 
 
 def _default_log(_msg: str) -> None:
@@ -119,14 +110,7 @@ def _already_has_rostovka(name: str, length: str) -> bool:
 
 
 def _is_data_description(text: str) -> bool:
-    key = _norm(text).casefold()
-    if not key:
-        return False
-    if key in _NON_DATA_DESC:
-        return False
-    if key.startswith("subtotal"):
-        return False
-    return True
+    return is_holland_product_description(text)
 
 
 @dataclass(frozen=True)
