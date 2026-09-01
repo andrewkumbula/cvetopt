@@ -57,7 +57,7 @@ def main() -> int:
     rows = grid_by_row(read_xlsx_grid(bif_copy))
     new_codes = []
     for rn, cells in rows.items():
-        if (cells.get("C") or "") == "Роза" and (cells.get("B") or "") == "":
+        if (cells.get("C") or "") == "Роза" and (cells.get("B") or "") in {"", "-"}:
             code = (cells.get("D") or "").strip()
             if code and code.lower() != "mix":
                 new_codes.append(

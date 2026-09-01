@@ -311,6 +311,37 @@ def backup_biflorica_before_mixes(path: Path) -> Path:
     return backup
 
 
+_BIFLORICA_MONEY_FORMAT = '#,##0.00_- "$"'
+_PLANTATION_EMPTY = "-"
+
+
+def _sample_money_format(
+    ws: object,
+    col_index: dict[str, int],
+    length_map: dict[str, str],
+    *,
+    header_row: int,
+) -> str:
+    """Формат цены/суммы из существующих строк отчёта."""
+    letters = list(length_map.values())
+    if "P" in col_index:
+        letters.append("P")
+    for row_no in range(header_row + 1, ws.max_row + 1):  # type: ignore[attr-defined]
+        for letter in letters:
+            col = col_index.get(letter)
+            if col is None:
+                continue
+            cell = ws.cell(row_no, col)  # type: ignore[attr-defined]
+            if cell.value is not None and cell.number_format and cell.number_format != "General":
+                return cell.number_format
+    return _BIFLORICA_MONEY_FORMAT
+
+
+def _set_money_cell(cell: object, value: float, number_format: str) -> None:
+    cell.value = round(value, 2)  # type: ignore[attr-defined]
+    cell.number_format = number_format  # type: ignore[attr-defined]
+
+
 def apply_mix_plans_to_biflorica(
     biflorica_path: Path,
     plans: list[LengthPlan],
@@ -334,6 +365,7 @@ def apply_mix_plans_to_biflorica(
     rows_grid = grid_by_row(read_excel_grid(path))
     _header_row, length_map = _biflorica_header(rows_grid, path)
     col_index = {letter: _col_to_index(letter) for letter in set(length_map.values()) | {"B", "C", "D", "O", "P"}}
+    money_fmt = _sample_money_format(ws, col_index, length_map, header_row=_header_row)
 
     # 1) списать qty с Mix-строк (накопить take по строке)
     take_by_row: dict[int, int] = {}
@@ -358,7 +390,7 @@ def apply_mix_plans_to_biflorica(
                     price = p
                     break
             if price is not None and "P" in col_index:
-                ws.cell(row_no, col_index["P"]).value = round(price * new_qty, 2)
+                _set_money_cell(ws.cell(row_no, col_index["P"]), price * new_qty, money_fmt)
 
     for row_no in sorted(rows_to_delete, reverse=True):
         ws.delete_rows(row_no, 1)
@@ -374,15 +406,19 @@ def apply_mix_plans_to_biflorica(
             if qty <= 0:
                 continue
             new_row = ws.max_row + 1
-            ws.cell(new_row, col_index["B"]).value = None  # плантация пустая
+            ws.cell(new_row, col_index["B"]).value = _PLANTATION_EMPTY
             ws.cell(new_row, col_index["C"]).value = "Роза"
             ws.cell(new_row, col_index["D"]).value = line.code
             for letter in length_map.values():
                 ws.cell(new_row, col_index[letter]).value = None
-            ws.cell(new_row, price_col).value = round(plan.avg_price, 4)
+            _set_money_cell(ws.cell(new_row, price_col), plan.avg_price, money_fmt)
             ws.cell(new_row, col_index["O"]).value = qty
             if "P" in col_index:
-                ws.cell(new_row, col_index["P"]).value = round(plan.avg_price * qty, 2)
+                _set_money_cell(
+                    ws.cell(new_row, col_index["P"]),
+                    plan.avg_price * qty,
+                    money_fmt,
+                )
             _lg(
                 f"Миксы: + {line.code} / {plan.length} см × {qty} @ {plan.avg_price:.4f}"
             )
