@@ -12,7 +12,11 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from cvetopt.invoice.biflorica_split import find_latest_biflorica_report, is_split_output_name
+from cvetopt.invoice.biflorica_split import (
+    biflorica_deals_header_or_raise,
+    find_latest_biflorica_report,
+    is_split_output_name,
+)
 from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
 LogFn = Callable[[str], None]
@@ -173,17 +177,8 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
     return TemplateDemand(path=path, lines=tuple(lines), totals=totals)
 
 
-def _biflorica_header(rows: dict[int, dict[str, str]]) -> tuple[int, dict[str, str]]:
-    for row_no in sorted(rows):
-        row = rows[row_no]
-        if row.get("A") == "ДАТА И ВРЕМЯ СДЕЛКИ" or row.get("B") == "ПЛАНТАЦИЯ":
-            length_map: dict[str, str] = {}
-            for col, val in row.items():
-                lab = _norm(val)
-                if lab in {"40", "50", "60", "70", "80", "90", "100", "100+"}:
-                    length_map[lab] = col
-            return row_no, length_map
-    raise RuntimeError("В Biflorica нет строки заголовка с длинами")
+def _biflorica_header(rows: dict[int, dict[str, str]], path: Path) -> tuple[int, dict[str, str]]:
+    return biflorica_deals_header_or_raise(rows, path=path)
 
 
 def _is_mix_rose(typ: str, variety: str) -> bool:
@@ -203,7 +198,7 @@ def plan_mix_allocation(
 ) -> list[LengthPlan]:
     _lg = log or _default_log
     rows = grid_by_row(read_xlsx_grid(biflorica_path))
-    header_row, length_map = _biflorica_header(rows)
+    header_row, length_map = _biflorica_header(rows, biflorica_path)
     plans: list[LengthPlan] = []
 
     for length in _TARGET_LENGTHS:
@@ -300,7 +295,7 @@ def apply_mix_plans_to_biflorica(
 
     # карта: длина → индекс колонки 1-based
     rows_grid = grid_by_row(read_xlsx_grid(path))
-    _header_row, length_map = _biflorica_header(rows_grid)
+    _header_row, length_map = _biflorica_header(rows_grid, path)
     col_index = {letter: _col_to_index(letter) for letter in set(length_map.values()) | {"B", "C", "D", "O", "P"}}
 
     # 1) списать qty с Mix-строк (накопить take по строке)

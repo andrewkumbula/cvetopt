@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import re
 import shutil
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from openpyxl import load_workbook
 
-from cvetopt.core.runtime_settings import BIFLORICA_DOWNLOAD_PREFIX
+from cvetopt.core.runtime_settings import BIFLORICA_DOWNLOAD_PREFIX, order_id_from_biflorica_report
 from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
 
 LogFn = Callable[[str], None]
@@ -25,6 +26,7 @@ LogFn = Callable[[str], None]
 _SPLIT_SUFFIXES = ("Гипсофила", "Роза", "Прочее", "Гортензия")
 _TYPE_COL = "C"
 _DATA_FIRST_FALLBACK = 7
+_BIFLORICA_LENGTHS = frozenset({"40", "50", "60", "70", "80", "90", "100", "100+"})
 
 
 def _default_log(_msg: str) -> None:
@@ -59,10 +61,80 @@ def classify_flower_type(type_name: str) -> str | None:
     return None
 
 
-def _find_header_row(rows: dict[int, dict[str, str]]) -> int:
+def normalize_biflorica_length_label(value: object) -> str | None:
+    text = _norm(value).replace(",", ".")
+    if not text:
+        return None
+    if text in _BIFLORICA_LENGTHS:
+        return text
+    try:
+        num = float(text)
+        if num == int(num):
+            label = str(int(num))
+            if label in _BIFLORICA_LENGTHS:
+                return label
+    except ValueError:
+        pass
+    return None
+
+
+def _biflorica_header_marker_row(row: dict[str, str]) -> bool:
+    a = _norm(row.get("A", "")).casefold()
+    b = _norm(row.get("B", "")).casefold()
+    return a == "дата и время сделки" or b == "плантация"
+
+
+def find_biflorica_deals_header(
+    rows: dict[int, dict[str, str]],
+) -> tuple[int, dict[str, str]] | None:
+    """Строка «ПЛАНТАЦИЯ» + колонки длин 40…100+ или None."""
     for row_no in sorted(rows):
         row = rows[row_no]
-        if row.get("B") == "ПЛАНТАЦИЯ" or row.get("A") == "ДАТА И ВРЕМЯ СДЕЛКИ":
+        if not _biflorica_header_marker_row(row):
+            continue
+        length_map: dict[str, str] = {}
+        for col, val in row.items():
+            lab = normalize_biflorica_length_label(val)
+            if lab:
+                length_map[lab] = col
+        if length_map:
+            return row_no, length_map
+    return None
+
+
+def biflorica_deals_header_or_raise(
+    rows: dict[int, dict[str, str]],
+    *,
+    path: Path | None = None,
+) -> tuple[int, dict[str, str]]:
+    found = find_biflorica_deals_header(rows)
+    if found is not None:
+        return found
+    name = path.name if path is not None else "Biflorica"
+    raise RuntimeError(
+        f"В {name} нет таблицы сделок Biflorica (строка «ПЛАНТАЦИЯ» и колонки 40–100). "
+        "Нужен полный отчёт BiFlorica-*.xlsx после скачивания, "
+        "не «… Роза.xlsx» / «… Гипсофила.xlsx»."
+    )
+
+
+def is_biflorica_deals_report(path: Path) -> bool:
+    try:
+        rows = grid_by_row(read_xlsx_grid(path))
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+        return False
+    if not rows:
+        return False
+    return find_biflorica_deals_header(rows) is not None
+
+
+def _find_header_row(rows: dict[int, dict[str, str]]) -> int:
+    found = find_biflorica_deals_header(rows)
+    if found is not None:
+        return found[0]
+    for row_no in sorted(rows):
+        row = rows[row_no]
+        if _biflorica_header_marker_row(row):
             return row_no
     return _DATA_FIRST_FALLBACK - 1
 
@@ -94,8 +166,24 @@ def find_latest_biflorica_report(download_dir: Path) -> Path:
             f"В {download_dir} нет полного отчёта BiFlorica-*.xlsx. "
             "Сначала скачайте отчёт или укажите файл явно."
         )
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return files[0].resolve()
+    files.sort(
+        key=lambda p: (
+            0 if order_id_from_biflorica_report(p) else 1,
+            -p.stat().st_mtime,
+        )
+    )
+    checked: list[str] = []
+    for path in files:
+        if is_biflorica_deals_report(path):
+            return path.resolve()
+        checked.append(path.name)
+    preview = ", ".join(checked[:5])
+    if len(checked) > 5:
+        preview += f" … (+{len(checked) - 5})"
+    raise FileNotFoundError(
+        f"В {download_dir} нет пригодного отчёта Biflorica (таблица «ПЛАНТАЦИЯ» + длины). "
+        f"Проверены: {preview}. Скачайте свежий BiFlorica-*.xlsx."
+    )
 
 
 @dataclass(frozen=True)
