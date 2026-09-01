@@ -17,7 +17,7 @@ from cvetopt.invoice.biflorica_split import (
     find_latest_biflorica_report,
     is_split_output_name,
 )
-from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
+from cvetopt.invoice.xlsx_read import ensure_xlsx_workbook, grid_by_row, read_excel_grid
 
 LogFn = Callable[[str], None]
 
@@ -123,7 +123,7 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
     if suffix == ".xls":
         raise ValueError("Шаблон .xls не поддерживается — сохраните как .xlsx")
 
-    rows = grid_by_row(read_xlsx_grid(path))
+    rows = grid_by_row(read_excel_grid(path))
     header_row: int | None = None
     code_col: str = "C"
     length_cols: dict[str, str] = {}  # length label → col letter
@@ -208,7 +208,7 @@ def plan_mix_allocation(
     log: LogFn | None = None,
 ) -> list[LengthPlan]:
     _lg = log or _default_log
-    rows = grid_by_row(read_xlsx_grid(biflorica_path))
+    rows = grid_by_row(read_excel_grid(biflorica_path))
     header_row, length_map = _biflorica_header(rows, biflorica_path)
     plans: list[LengthPlan] = []
 
@@ -300,12 +300,12 @@ def apply_mix_plans_to_biflorica(
       цена = avg, кол-во = из шаблона.
     """
     _lg = log or _default_log
-    path = biflorica_path.resolve()
+    path = ensure_xlsx_workbook(biflorica_path.resolve())
     wb = load_workbook(path)
     ws = wb.worksheets[0]
 
     # карта: длина → индекс колонки 1-based
-    rows_grid = grid_by_row(read_xlsx_grid(path))
+    rows_grid = grid_by_row(read_excel_grid(path))
     _header_row, length_map = _biflorica_header(rows_grid, path)
     col_index = {letter: _col_to_index(letter) for letter in set(length_map.values()) | {"B", "C", "D", "O", "P"}}
 
@@ -403,7 +403,9 @@ def run_mix_separation_from_dirs(
 ) -> tuple[Path, Path, list[LengthPlan]]:
     _lg = log or _default_log
     tpl = template_path or find_latest_filled_sklad_template(sklad_dir)
-    bif = biflorica_path or find_latest_biflorica_report(biflorica_dir)
+    bif = ensure_xlsx_workbook(
+        (biflorica_path or find_latest_biflorica_report(biflorica_dir)).resolve()
+    )
     if is_split_output_name(bif.name):
         raise ValueError(f"Нельзя разбирать уже разделённый файл: {bif.name}")
     _lg(f"Миксы: шаблон={tpl.name}, biflorica={bif.name}")

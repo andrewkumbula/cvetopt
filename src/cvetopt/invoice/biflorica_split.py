@@ -16,17 +16,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import xlrd
 from openpyxl import load_workbook
 
 from cvetopt.core.runtime_settings import BIFLORICA_DOWNLOAD_PREFIX, order_id_from_biflorica_report
-from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
+from cvetopt.invoice.xlsx_read import ensure_xlsx_workbook, grid_by_row, read_excel_grid
 
 LogFn = Callable[[str], None]
 
 _SPLIT_SUFFIXES = ("Гипсофила", "Роза", "Прочее", "Гортензия")
+_BIFLORICA_LENGTHS = frozenset({"40", "50", "60", "70", "80", "90", "100", "100+"})
 _TYPE_COL = "C"
 _DATA_FIRST_FALLBACK = 7
-_BIFLORICA_LENGTHS = frozenset({"40", "50", "60", "70", "80", "90", "100", "100+"})
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0"
 
 
 def _default_log(_msg: str) -> None:
@@ -116,16 +118,13 @@ def diagnose_biflorica_report(path: Path) -> str | None:
         head = path.read_bytes()[:4]
     except OSError as exc:
         return str(exc)
-    if head[:2] != b"PK":
+    if head[:2] != b"PK" and head[:4] != _OLE_MAGIC:
         return (
-            "не настоящий xlsx (не ZIP) — откройте в Excel: если не открывается, "
-            "удалите и скачайте отчёт заново кнопкой Biflorica"
+            "не Excel (ни xlsx, ни xls) — удалите и скачайте отчёт заново кнопкой Biflorica"
         )
     try:
-        rows = grid_by_row(read_xlsx_grid(path))
-    except zipfile.BadZipFile:
-        return "повреждённый xlsx — удалите и скачайте отчёт заново"
-    except (OSError, ValueError, KeyError) as exc:
+        rows = grid_by_row(read_excel_grid(path))
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, xlrd.XLRDError) as exc:
         return f"не удалось прочитать: {exc}"
     if not rows:
         return "пустой лист Excel"
@@ -258,7 +257,7 @@ def split_biflorica_by_type(
     шапку + строки нужного типа (колонка C «ТИП»).
     """
     _lg = log or _default_log
-    source = source.resolve()
+    source = ensure_xlsx_workbook(source.resolve())
     if not source.is_file():
         raise FileNotFoundError(f"Файл не найден: {source}")
     if is_split_output_name(source.name):
@@ -267,7 +266,7 @@ def split_biflorica_by_type(
     out_dir = (output_dir or source.parent).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    grid = read_xlsx_grid(source)
+    grid = read_excel_grid(source)
     rows = grid_by_row(grid)
     header_row = _find_header_row(rows)
     _lg(f"Гипсофила: источник {source.name}, шапка строка {header_row}")

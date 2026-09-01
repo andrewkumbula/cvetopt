@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from cvetopt.invoice.xlsx_read import grid_by_row, read_xlsx_grid
+from cvetopt.invoice.xlsx_read import grid_by_row, read_excel_grid
 
 # Biflorica: цены по длинам в E–L; на листе обработки количества в S–Z.
 _LENGTHS: list[tuple[str, str, str]] = [
@@ -44,7 +44,7 @@ def _find_header_row(rows: dict[int, dict[str, str]]) -> int:
 
 
 def transform_biflorica_deals(path: Path) -> list[EcuadorDealRow]:
-    grid = read_xlsx_grid(path)
+    grid = read_excel_grid(path)
     rows = grid_by_row(grid)
     header_row = _find_header_row(rows)
     deals: list[EcuadorDealRow] = []
