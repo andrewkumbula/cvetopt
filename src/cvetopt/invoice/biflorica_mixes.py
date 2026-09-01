@@ -254,6 +254,7 @@ def plan_mix_allocation(
             )
         candidates.sort(key=lambda x: (-x[0], x[2]))  # дорогие сначала
 
+        available = sum(avail for _, avail, _, _, _ in candidates)
         left = need
         takes: list[MixTake] = []
         for price, avail, row_no, plant, _ in candidates:
@@ -271,9 +272,17 @@ def plan_mix_allocation(
             left -= take
 
         if left > 0:
+            hint = ""
+            if available > 0 and available < need:
+                hint = (
+                    " Похоже, миксы уже запускали на этом файле: удалили только новые "
+                    "строки внизу, а исходные Mix уже списаны. Восстановите "
+                    f"«{biflorica_path.name}» из копии «… до миксов ….xlsx» "
+                    "в той же папке (или скачайте Biflorica заново) и запустите снова."
+                )
             raise RuntimeError(
-                f"Миксы: для длины {length} нужно {need}, в Biflorica Mix хватило "
-                f"только {need - left}. Недостаточно стеблей."
+                f"Миксы: для длины {length} нужно {need}, в Biflorica Mix есть "
+                f"только {available} (не хватает {left}).{hint}"
             )
 
         total_stems = sum(t.take_qty for t in takes)
