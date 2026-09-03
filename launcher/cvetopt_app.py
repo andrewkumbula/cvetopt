@@ -3,8 +3,8 @@ cvetopt Windows launcher (built to cvetopt.exe).
 
 1) Start uvicorn from project .venv (hidden)
 2) Wait until http://127.0.0.1:8000 answers
-3) Open Edge/Chrome --app with a dedicated profile (so we can wait for close)
-4) On window close - stop the server
+3) Open Edge/Chrome --app and block until the window is closed
+4) Stop the server
 """
 from __future__ import annotations
 
@@ -244,88 +244,86 @@ def browser_candidates() -> list[Path]:
     return found
 
 
-def browser_pids_for_profile(profile_marker: str) -> list[int]:
-    """PIDs whose command line mentions our Edge/Chrome profile folder."""
-    marker = profile_marker.replace("'", "''")
-    ps = (
-        "Get-CimInstance Win32_Process | "
-        f"Where-Object {{ $_.CommandLine -and $_.CommandLine -like '*{marker}*' }} | "
-        "Select-Object -ExpandProperty ProcessId"
-    )
-    try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
-            capture_output=True,
-            text=True,
-            timeout=45,
-            creationflags=CREATE_NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    pids: list[int] = []
-    for line in (r.stdout or "").splitlines():
-        line = line.strip()
-        if line.isdigit():
-            pids.append(int(line))
-    return pids
+_APP_TITLE_MARKERS = ("127.0.0.1:8000", "localhost:8000", "cvetopt")
+
+
+def _app_window_is_open() -> bool:
+    """True if a visible top-level window title looks like our --app UI."""
+    if sys.platform != "win32":
+        return False
+    user32 = ctypes.windll.user32
+    found = False
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def _enum_proc(hwnd: int, _lparam: int) -> bool:
+        nonlocal found
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd) + 1
+        if length <= 1:
+            return True
+        buf = ctypes.create_unicode_buffer(length)
+        user32.GetWindowTextW(hwnd, buf, length)
+        title = buf.value.casefold()
+        if any(marker in title for marker in _APP_TITLE_MARKERS):
+            found = True
+            return False
+        return True
+
+    user32.EnumWindows(_enum_proc, 0)
+    return found
+
+
+def _wait_for_app_window_close(root: Path) -> None:
+    """Poll until cvetopt app window disappears (no timeout, no MessageBox)."""
+    append_log(root, "wait for app window close (title poll)")
+    for _ in range(60):
+        if _app_window_is_open():
+            break
+        time.sleep(1)
+    else:
+        append_log(root, "app window not detected — stop after browser exit")
+        return
+
+    idle_rounds = 0
+    while True:
+        if _app_window_is_open():
+            idle_rounds = 0
+        else:
+            idle_rounds += 1
+            if idle_rounds >= 3:
+                append_log(root, "app window closed (title poll)")
+                return
+        time.sleep(1)
 
 
 def open_app_and_wait(root: Path, url: str) -> None:
     """
-    Open Edge/Chrome --app, then block until the user finishes.
+    Open Edge/Chrome --app, then block until the user closes the window.
 
-    Chrome often drops profile processes quickly (merges into main browser),
-    so close-detection alone is unreliable. We:
-    1) try to wait until profile processes disappear (after they appeared),
-    2) always fall back to a MessageBox — OK stops the server.
+    Primary: subprocess.run on the browser (same as cvetopt-launcher.vbs).
+    Fallback: if the process exits too quickly, poll for the app window title.
     """
-    profile = root / "data" / "edge-app-profile"
-    profile.mkdir(parents=True, exist_ok=True)
-    marker = "edge-app-profile"
-
     browsers = browser_candidates()
-    append_log(root, f"browsers found: {[str(b) for b in browsers]}")
     if browsers:
         browser = browsers[0]
-        cmd = [
-            str(browser),
-            f"--user-data-dir={profile}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            f"--app={url}",
-        ]
+        cmd = [str(browser), f"--app={url}"]
         append_log(root, f"open app: {' '.join(cmd)}")
-        subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
-    else:
-        append_log(root, "no Edge/Chrome - start URL")
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", url],
-            creationflags=CREATE_NO_WINDOW,
-        )
+        started = time.time()
+        result = subprocess.run(cmd, check=False)
+        elapsed = time.time() - started
+        append_log(root, f"browser process ended code={result.returncode} after {elapsed:.1f}s")
+        if elapsed >= 5:
+            return
+        append_log(root, "browser returned quickly — waiting for window close")
+        _wait_for_app_window_close(root)
+        return
 
-    # Give the window a few seconds to appear; optional close-detect.
-    appeared_at: float | None = None
-    idle_rounds = 0
-    for tick in range(45):  # ~90 seconds max of polling before MessageBox
-        time.sleep(2)
-        pids = browser_pids_for_profile(marker)
-        if pids:
-            if appeared_at is None:
-                appeared_at = time.time()
-                append_log(root, f"app window processes: {pids}")
-            idle_rounds = 0
-            continue
-        if appeared_at is not None and (time.time() - appeared_at) >= 10:
-            idle_rounds += 1
-            if idle_rounds >= 5:
-                append_log(root, "app window closed (process poll)")
-                return
-
-    append_log(root, "MessageBox wait (OK = stop server)")
-    message_box(
-        "cvetopt is running.\n\n"
-        "Work in the app window.\n"
-        "When finished, click OK — the server will stop."
+    append_log(root, "no Edge/Chrome — start /wait url")
+    subprocess.run(
+        ["cmd", "/c", "start", "/wait", "", url],
+        creationflags=CREATE_NO_WINDOW,
+        check=False,
     )
 
 
