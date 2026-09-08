@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 
 from cvetopt.invoice.biflorica_split import (
     biflorica_deals_header_or_raise,
@@ -432,6 +433,7 @@ def backup_biflorica_before_mixes(path: Path) -> Path:
 
 _BIFLORICA_MONEY_FORMAT = '#,##0.00_- "$"'
 _PLANTATION_EMPTY = "-"
+_DEAL_DATE_FORMAT = "DD MMM YYYY, HH:MM"
 
 
 def _sample_money_format(
@@ -456,9 +458,41 @@ def _sample_money_format(
     return _BIFLORICA_MONEY_FORMAT
 
 
+def _sample_deal_date(
+    ws: object,
+    *,
+    date_col: int,
+    header_row: int,
+    prefer_rows: list[int] | None = None,
+) -> tuple[object | None, str]:
+    """Дата/время сделки и её number_format из существующих строк."""
+    candidates: list[int] = []
+    if prefer_rows:
+        candidates.extend(prefer_rows)
+    candidates.extend(range(header_row + 1, ws.max_row + 1))  # type: ignore[attr-defined]
+    seen: set[int] = set()
+    for row_no in candidates:
+        if row_no in seen or row_no <= header_row:
+            continue
+        seen.add(row_no)
+        cell = ws.cell(row_no, date_col)  # type: ignore[attr-defined]
+        if cell.value is None or cell.value == "":
+            continue
+        fmt = cell.number_format if cell.number_format and cell.number_format != "General" else _DEAL_DATE_FORMAT
+        return cell.value, fmt
+    return None, _DEAL_DATE_FORMAT
+
+
 def _set_money_cell(cell: object, value: float, number_format: str) -> None:
     cell.value = round(value, 2)  # type: ignore[attr-defined]
     cell.number_format = number_format  # type: ignore[attr-defined]
+
+
+def _set_deal_date_cell(cell: object, value: object, number_format: str) -> None:
+    """Дата как у соседних строк: значение + формат, без цветной заливки."""
+    cell.value = value  # type: ignore[attr-defined]
+    cell.number_format = number_format  # type: ignore[attr-defined]
+    cell.fill = PatternFill(fill_type=None)  # type: ignore[attr-defined]
 
 
 def apply_mix_plans_to_biflorica(
@@ -483,8 +517,20 @@ def apply_mix_plans_to_biflorica(
     # карта: длина → индекс колонки 1-based
     rows_grid = grid_by_row(read_excel_grid(path))
     _header_row, length_map = _biflorica_header(rows_grid, path)
-    col_index = {letter: _col_to_index(letter) for letter in set(length_map.values()) | {"B", "C", "D", "O", "P"}}
+    col_index = {
+        letter: _col_to_index(letter)
+        for letter in set(length_map.values()) | {"A", "B", "C", "D", "O", "P"}
+    }
     money_fmt = _sample_money_format(ws, col_index, length_map, header_row=_header_row)
+    prefer_date_rows = [t.bif_row for plan in plans for t in plan.takes]
+    deal_date, date_fmt = _sample_deal_date(
+        ws,
+        date_col=col_index["A"],
+        header_row=_header_row,
+        prefer_rows=prefer_date_rows,
+    )
+    if deal_date is None:
+        _lg("Миксы: предупреждение — в отчёте нет даты сделки, колонка A у новых строк пустая")
 
     # 1) списать qty с Mix-строк (накопить take по строке)
     take_by_row: dict[int, int] = {}
@@ -525,6 +571,8 @@ def apply_mix_plans_to_biflorica(
             if qty <= 0:
                 continue
             new_row = ws.max_row + 1
+            if deal_date is not None:
+                _set_deal_date_cell(ws.cell(new_row, col_index["A"]), deal_date, date_fmt)
             ws.cell(new_row, col_index["B"]).value = _PLANTATION_EMPTY
             ws.cell(new_row, col_index["C"]).value = "Роза"
             ws.cell(new_row, col_index["D"]).value = line.code
