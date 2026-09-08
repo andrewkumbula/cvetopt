@@ -57,19 +57,16 @@ def is_split_output_name(name: str) -> bool:
     return False
 
 
-def classify_flower_type(type_name: str) -> str | None:
+def classify_flower_type(type_name: str) -> str:
     """
-    Возвращает ярлык файла-выгрузки или None (остаётся только в полном отчёте).
-    Гипсофила → «Гипсофила»; любая роза → «Роза».
+    Ярлык файла-выгрузки по колонке «ТИП».
+    Гипсофила → «Гипсофила»; всё остальное (роза, альстро, гвоздика…) → «Роза».
+    Имя «Роза.xlsx» историческое: в нём весь ассортимент без гипсофилы.
     """
     t = _norm(type_name).casefold()
-    if not t:
-        return None
     if "гипсофил" in t:
         return "Гипсофила"
-    if "роз" in t:  # Роза, Крашеная роза
-        return "Роза"
-    return None
+    return "Роза"
 
 
 def normalize_biflorica_length_label(value: object) -> str | None:
@@ -282,18 +279,13 @@ def split_biflorica_by_type(
 
     # 1-based Excel rows belonging to each label
     by_label: dict[str, list[int]] = {"Гипсофила": [], "Роза": []}
-    other = 0
     for row_no in sorted(rows):
         if row_no <= header_row:
             continue
         typ = rows[row_no].get(_TYPE_COL, "")
         if not _norm(typ) and not _norm(rows[row_no].get("B", "")):
             continue
-        label = classify_flower_type(typ)
-        if label is None:
-            other += 1
-            continue
-        by_label[label].append(row_no)
+        by_label[classify_flower_type(typ)].append(row_no)
 
     outputs: dict[str, Path] = {}
     counts: dict[str, int] = {}
@@ -307,9 +299,6 @@ def split_biflorica_by_type(
         outputs[label] = dest
         counts[label] = len(keep_rows)
         _lg(f"Гипсофила: {label} → {dest.name} ({len(keep_rows)} строк)")
-
-    if other:
-        _lg(f"Гипсофила: прочих типов (только в полном файле): {other}")
 
     return BifloricaSplitResult(source=source, outputs=outputs, counts=counts)
 
