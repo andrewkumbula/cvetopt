@@ -269,6 +269,47 @@ class DelmirConfig(BaseModel):
     selectors: DelmirSelectors = Field(default_factory=DelmirSelectors)
 
 
+WeekdayName = Literal[
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+]
+
+_WEEKDAY_INDEX: dict[WeekdayName, int] = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+
+class ScheduleTaskConfig(BaseModel):
+    enabled: bool = True
+    weekday: WeekdayName = "monday"
+    hour: int = 9
+    minute: int = 0
+
+    @property
+    def weekday_index(self) -> int:
+        return _WEEKDAY_INDEX[self.weekday]
+
+
+class ScheduleConfig(BaseModel):
+    """Автозапуск кнопок по расписанию, пока запущен сервер (cvetopt.exe)."""
+
+    enabled: bool = False
+    # «Скачать отчёты (Biflorica + Эквадор)»
+    biflorica: ScheduleTaskConfig = Field(
+        default_factory=lambda: ScheduleTaskConfig(weekday="thursday")
+    )
+    # По очереди: «Заполнить Auto_new.xls» → «Голландия: почта → auto1 → перевод» →
+    # «Шаблон → копия на сегодняшнюю дату»
+    tuesday_chain: ScheduleTaskConfig = Field(
+        default_factory=lambda: ScheduleTaskConfig(weekday="tuesday")
+    )
+
+
 class AppYamlConfig(BaseModel):
     selection: SelectionConfig = Field(default_factory=SelectionConfig)
     playwright: PlaywrightConfig = Field(default_factory=PlaywrightConfig)
@@ -279,6 +320,7 @@ class AppYamlConfig(BaseModel):
     ecuador_create: EcuadorCreateConfig = Field(default_factory=EcuadorCreateConfig)
     delmir: DelmirConfig = Field(default_factory=DelmirConfig)
     mail: MailConfig = Field(default_factory=MailConfig)
+    schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
 
 
 def load_yaml_config(path: Path) -> AppYamlConfig:

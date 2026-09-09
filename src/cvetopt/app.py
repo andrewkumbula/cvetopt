@@ -11,7 +11,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from cvetopt.core.job_manager import job_manager, run_coro_logged
+from cvetopt.core.job_chains import run_balance_auto_and_delmir
+from cvetopt.core.job_manager import job_manager
 from cvetopt.core.job_messages import log_file_hint
 from cvetopt.core.models import JobStatus
 from cvetopt.core.logging_setup import configure_logging
@@ -38,7 +39,6 @@ from cvetopt.scrapers.holland_translated import run_holland_translated_job
 from cvetopt.scrapers.sklad_template_copy import run_sklad_template_copy_job
 from cvetopt.scrapers.gypsophila_split import run_gypsophila_split_job
 from cvetopt.scrapers.mix_separation import run_mix_separation_job
-from cvetopt.scrapers.balance_auto import run_balance_auto_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
 from cvetopt.scrapers.delmir import run_delmir_transport_job
 from cvetopt.scrapers.mail_attachments import run_mail_attachments_job
@@ -52,6 +52,13 @@ _TEMPLATES = Jinja2Templates(
 
 app = FastAPI(title="cvetopt", version="0.1.0")
 configure_logging(EnvSettings())
+
+
+@app.on_event("startup")
+async def _start_scheduler() -> None:
+    from cvetopt.core.scheduler import start_scheduler
+
+    asyncio.create_task(start_scheduler())
 
 
 def _git_version() -> dict[str, str]:
@@ -327,33 +334,10 @@ async def run_balance_auto(
             status_code=422,
         )
     job = job_manager.create_job(f"balance_auto+delmir:{effective_delmir_lookback}d")
-
-    async def _chain() -> None:
-        from cvetopt.core.job_manager import job_log
-        from cvetopt.core.models import JobStatus
-
-        await run_coro_logged(job.id, run_balance_auto_job(job.id, env))
-        current = job_manager.get(job.id)
-        if current is None or current.status != JobStatus.completed:
-            await job_log(
-                job.id,
-                "Шаг 2 (баланс Biflorica) завершился неудачно — Транспорт трак с del-mir пропущен.",
-            )
-            return
-        await job_log(
-            job.id,
-            f"Шаг 2 завершён успешно. Запускаю Транспорт трак с del-mir.com ({effective_delmir_lookback} дн.)…",
-        )
-        await run_coro_logged(
-            job.id,
-            run_delmir_transport_job(
-                job.id,
-                env,
-                lookback_days_override=effective_delmir_lookback,
-            ),
-        )
-
-    job_manager.schedule(job.id, _chain())
+    job_manager.schedule(
+        job.id,
+        run_balance_auto_and_delmir(job.id, env, effective_delmir_lookback),
+    )
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 

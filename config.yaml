@@ -147,3 +147,22 @@ mail:
     - noreply@enigmaflowers.nl
   subject_contains: []
   archive_previous_on_download: true
+
+# Автозапуск кнопок по расписанию — работает, пока запущен cvetopt.exe (сервер).
+# weekday: monday..sunday. Чтобы выключить весь автозапуск — enabled: false здесь,
+# чтобы выключить одну задачу — enabled: false у неё.
+schedule:
+  enabled: true
+  # «Скачать отчёты (Biflorica + Эквадор)»
+  biflorica:
+    enabled: true
+    weekday: thursday
+    hour: 9
+    minute: 0
+  # По очереди: «Заполнить Auto_new.xls» → «Голландия: почта → auto1 → перевод» →
+  # «Шаблон → копия на сегодняшнюю дату»
+  tuesday_chain:
+    enabled: true
+    weekday: tuesday
+    hour: 9
+    minute: 0
