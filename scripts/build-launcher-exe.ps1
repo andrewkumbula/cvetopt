@@ -12,10 +12,12 @@ if (-not (Test-Path $launcherPy)) {
     Write-Error "Missing $launcherPy"
 }
 
-$buildDir = Join-Path $ProjectRoot "build\launcher"
-$oldExe = Join-Path $ProjectRoot "cvetopt.exe"
-if (Test-Path $oldExe) {
-    Remove-Item -Force $oldExe
+$buildDir = Join-Path $env:TEMP "cvetopt-build"
+$distDir = Join-Path $buildDir "dist"
+$newExe = Join-Path $distDir "cvetopt.exe"
+$finalExe = Join-Path $ProjectRoot "cvetopt.exe"
+if (Test-Path $buildDir) {
+    Remove-Item -Recurse -Force $buildDir
 }
 
 Write-Host "==> Building cvetopt.exe (PyInstaller, onefile, noconsole)..."
@@ -23,16 +25,20 @@ uv run --with pyinstaller pyinstaller `
     --onefile `
     --noconsole `
     --name cvetopt `
-    --distpath $ProjectRoot `
+    --distpath $distDir `
     --workpath $buildDir `
     --specpath $buildDir `
     --clean `
     $launcherPy
 
-if (-not (Test-Path $oldExe)) {
-    Write-Error "Build did not create cvetopt.exe"
+if (-not (Test-Path $newExe)) {
+    Write-Error "Build did not create cvetopt.exe - old $finalExe was left untouched"
 }
 
+# Only replace the old exe now that the new build is confirmed to exist.
+Copy-Item -Force $newExe $finalExe
+Remove-Item -Recurse -Force $buildDir
+
 Write-Host ""
-Write-Host "OK: $oldExe"
+Write-Host "OK: $finalExe"
 Write-Host "Shortcut: powershell -ExecutionPolicy Bypass -File scripts\create-desktop-shortcut.ps1"
