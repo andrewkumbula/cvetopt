@@ -305,9 +305,11 @@ class ScheduleConfig(BaseModel):
     )
     # По очереди: «Заполнить Auto_new.xls» → «Голландия: почта → auto1 → перевод» →
     # «Шаблон → копия на сегодняшнюю дату»
-    tuesday_chain: ScheduleTaskConfig = Field(
+    weekly_chain: ScheduleTaskConfig = Field(
         default_factory=lambda: ScheduleTaskConfig(weekday="tuesday")
     )
+    # Зависший Excel иначе держит прогон вечно, и расписание молча встаёт навсегда.
+    max_job_hours: int = 4
 
 
 class AppYamlConfig(BaseModel):

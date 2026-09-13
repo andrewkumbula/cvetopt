@@ -161,8 +161,10 @@ schedule:
     minute: 0
   # По очереди: «Заполнить Auto_new.xls» → «Голландия: почта → auto1 → перевод» →
   # «Шаблон → копия на сегодняшнюю дату»
-  tuesday_chain:
+  weekly_chain:
     enabled: true
     weekday: tuesday
     hour: 9
     minute: 0
+  # Прогон дольше этого — считаем зависшим и снимаем (иначе расписание встанет навсегда).
+  max_job_hours: 4
