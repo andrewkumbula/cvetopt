@@ -15,11 +15,15 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$UserId,
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+    [string]$ProjectRoot,
     [string]$TaskName = "cvetopt-autostart"
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $ProjectRoot) {
+    $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+}
 
 $vbs = Join-Path $ProjectRoot "cvetopt-hidden.vbs"
 if (-not (Test-Path $vbs)) {
