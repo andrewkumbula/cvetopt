@@ -6,6 +6,10 @@
 #   Pair it with Sysinternals Autologon so a reboot needs no human - see README_WIN.md §5.
 #   Excel COM is only supported in an interactive session, which is why this is the default.
 #
+# -Hidden: same interactive session, but the console window is hidden (via cvetopt-hidden.vbs).
+#   Excel is unaffected - only the window goes away. Task Scheduler stops tracking the server
+#   process, so the task reads Ready while it runs; stop it with cvetopt-stop.bat.
+#
 # -Unattended: starts at boot under stored credentials, no logon and no window at all.
 #   Excel then runs in session 0, where Microsoft does not support it: a modal Excel
 #   dialog (repair/locked file) would hang invisibly and silently stop every later run.
@@ -19,6 +23,7 @@ param(
     [string]$UserId,
     [switch]$Unattended,
     [System.Security.SecureString]$Password,
+    [switch]$Hidden,
     [switch]$NoLock,
     [string]$ProjectRoot,
     [string]$TaskName = "cvetopt-autostart"
@@ -69,13 +74,33 @@ if ($Unattended) {
     Write-Host "-Unattended if anything hangs."
 }
 else {
-    $action = New-ScheduledTaskAction -Execute $bat -WorkingDirectory $ProjectRoot
+    if ($Hidden) {
+        # Прячем только консоль: сервер остаётся в той же интерактивной сессии, Excel не страдает.
+        $vbs = Join-Path $ProjectRoot "cvetopt-hidden.vbs"
+        if (-not (Test-Path $vbs)) {
+            Write-Error "Missing $vbs"
+        }
+        $action = New-ScheduledTaskAction `
+            -Execute "$env:SystemRoot\System32\wscript.exe" `
+            -Argument "`"$vbs`"" `
+            -WorkingDirectory $ProjectRoot
+    }
+    else {
+        $action = New-ScheduledTaskAction -Execute $bat -WorkingDirectory $ProjectRoot
+    }
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
     $principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Highest
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $settings -Principal $principal -Force | Out-Null
 
-    Write-Host "OK: task '$TaskName' - starts cvetopt.bat at logon of $UserId."
+    if ($Hidden) {
+        Write-Host "OK: task '$TaskName' - starts the server hidden at logon of $UserId."
+        Write-Host "No console window. wscript exits at once, so the task shows Ready while the"
+        Write-Host "server runs on - stop it with cvetopt-stop.bat, not through Task Scheduler."
+    }
+    else {
+        Write-Host "OK: task '$TaskName' - starts cvetopt.bat at logon of $UserId."
+    }
 
     if ($NoLock) {
         Unregister-ScheduledTask -TaskName $lockTaskName -Confirm:$false -ErrorAction SilentlyContinue
