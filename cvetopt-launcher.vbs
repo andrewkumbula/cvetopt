@@ -7,7 +7,7 @@ Const APP_URL = "http://127.0.0.1:8000/"
 Const HEALTH_URL = "http://127.0.0.1:8000/api/state"
 Const START_TIMEOUT_SEC = 90
 
-Dim shell, fso, here, batPath, stopPath, waited
+Dim shell, fso, here, batPath, stopPath, waited, startedHere
 
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
@@ -23,7 +23,10 @@ End If
 
 shell.CurrentDirectory = here
 
+startedHere = False
+
 If Not IsServerUp() Then
+  startedHere = True
   shell.Environment("Process")("CVETOPT_HIDDEN") = "1"
   shell.Environment("Process")("CVETOPT_NO_BROWSER") = "1"
   shell.Run """" & batPath & """", 0, False
@@ -47,7 +50,8 @@ End If
 ' Ждём, пока пользователь закроет окно приложения.
 OpenAsAppAndWait APP_URL
 
-StopServer
+' Сервер, поднятый до нас (задача Планировщика), оставляем работать — на нём расписание.
+If startedHere Then StopServer
 
 Function IsServerUp()
   On Error Resume Next
