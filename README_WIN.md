@@ -147,7 +147,7 @@ cd C:\Apps\cvetopt
 powershell -ExecutionPolicy Bypass -File scripts\register-startup-task.ps1 -UserId "SERVER\invoice"
 ```
 
-Скрипт вешает задачу на `cvetopt-hidden.vbs` (сервер без окна, без автооткрытия браузера).
+Скрипт вешает задачу на `cvetopt.bat` (как в шаге 2 выше) — при входе появится окно консоли и сам откроется браузер, это нормально.
 
 ### Автозапуск кнопок по расписанию (`schedule:` в `config.yaml`)
 
