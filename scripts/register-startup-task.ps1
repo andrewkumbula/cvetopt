@@ -1,21 +1,23 @@
-# Registers a Windows Scheduled Task that starts the cvetopt server
-# (cvetopt.bat - visible console window, opens a browser tab, same as double-clicking
-# it) at logon of the given Windows account, so it keeps running in the background
-# even if nobody has cvetopt.exe open. This is what makes config.yaml's
-# schedule: (auto-run of the report buttons) fire unattended.
+# Registers a Windows Scheduled Task that runs the cvetopt server, so config.yaml's
+# schedule: (auto-run of the report buttons) fires without anyone using the app.
 #
-# Requires:
-# - Run as Administrator on the Windows server.
-# - The account in -UserId must be able to log on and run Excel COM (interactive
-#   session - do NOT use SYSTEM, see README_WIN.md section 5).
-# - For the server to survive an unattended reboot, that account also needs
-#   Sysinternals Autologon configured (README_WIN.md section 5) - otherwise this
-#   task only fires once someone actually logs into that account (RDP etc).
+# Default (unattended): starts at system boot, no console window, nobody has to log in.
+#   Excel COM is not officially supported without an interactive session - if the Excel
+#   steps hang or fail, re-register with -Interactive and set up Autologon instead.
+#   Side effect: the "выбрать папку/файл" buttons in Настройки stop working (the dialog
+#   would open on the invisible session-0 desktop) - type paths by hand there.
+#
+# -Interactive: starts at logon of -UserId with a visible console window. Needs someone
+#   (or Sysinternals Autologon) to actually log into that account. See README_WIN.md §5.
+#
+# Requires Administrator. -UserId must own the project files and be able to run Excel.
 #
 # Run: powershell -ExecutionPolicy Bypass -File scripts\register-startup-task.ps1 -UserId "SERVER\invoice"
 param(
     [Parameter(Mandatory = $true)]
     [string]$UserId,
+    [System.Security.SecureString]$Password,
+    [switch]$Interactive,
     [string]$ProjectRoot,
     [string]$TaskName = "cvetopt-autostart"
 )
@@ -31,23 +33,50 @@ if (-not (Test-Path $bat)) {
     Write-Error "Missing $bat"
 }
 
-$action = New-ScheduledTaskAction -Execute $bat -WorkingDirectory $ProjectRoot
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
+# ExecutionTimeLimit 0 - without it Task Scheduler kills the server after 3 days.
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
-    -MultipleInstances IgnoreNew
-$principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Highest
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit ([TimeSpan]::Zero)
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-    -Settings $settings -Principal $principal -Force | Out-Null
+if ($Interactive) {
+    $action = New-ScheduledTaskAction -Execute $bat -WorkingDirectory $ProjectRoot
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
+    $principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Highest
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+        -Settings $settings -Principal $principal -Force | Out-Null
 
-Write-Host "OK: task '$TaskName' - starts cvetopt.bat at logon of $UserId."
-Write-Host "Console window + browser tab open automatically (like double-clicking cvetopt.bat)."
-Write-Host "Server keeps running in the background; cvetopt.exe just attaches to it and"
-Write-Host "won't stop it when its window is closed (only stops a server it started itself)."
+    Write-Host "OK: task '$TaskName' - starts cvetopt.bat at logon of $UserId."
+    Write-Host "Console window + browser tab open automatically. Do not close that window."
+    Write-Host "Needs Autologon for $UserId to survive a reboot (README_WIN.md, section 5)."
+}
+else {
+    if (-not $Password) {
+        $Password = Read-Host "Windows password for $UserId" -AsSecureString
+    }
+    $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
+        [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password))
+
+    # No interactive desktop here: skip the browser tab and the pause-on-error prompts.
+    $action = New-ScheduledTaskAction `
+        -Execute "$env:SystemRoot\System32\cmd.exe" `
+        -Argument "/c set CVETOPT_HIDDEN=1&& set CVETOPT_NO_BROWSER=1&& `"$bat`"" `
+        -WorkingDirectory $ProjectRoot
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $trigger.Delay = "PT1M"
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+        -Settings $settings -User $UserId -Password $plain -RunLevel Highest -Force | Out-Null
+
+    Write-Host "OK: task '$TaskName' - starts the cvetopt server at boot as $UserId."
+    Write-Host "No console window, no logon needed. Test it now: schtasks /Run /TN `"$TaskName`""
+    Write-Host ""
+    Write-Host "IMPORTANT: run one Excel step from the UI once (e.g. «Шаблон -> копия на"
+    Write-Host "сегодняшнюю дату») to confirm Excel works without an interactive session."
+    Write-Host "If it hangs: re-run this script with -Interactive and set up Autologon."
+}
+
 Write-Host ""
-Write-Host "For this to also survive an unattended reboot, configure Autologon for $UserId"
-Write-Host "(README_WIN.md, section 5)."
-Write-Host "To stop the background server manually: cvetopt-stop.bat"
+Write-Host "cvetopt.exe attaches to this server and won't stop it when its window closes."
+Write-Host "To stop the server manually: cvetopt-stop.bat"
