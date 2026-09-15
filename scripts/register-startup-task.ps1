@@ -10,6 +10,10 @@
 #   Excel is unaffected - only the window goes away. Task Scheduler stops tracking the server
 #   process, so the task reads Ready while it runs; stop it with cvetopt-stop.bat.
 #
+# Also registers a watchdog task that checks every 5 minutes and restarts the server if it's
+# down - "At logon" only fires once per actual logon, so on its own it cannot recover from a
+# crash, a slow/failed cold start, or someone closing the window without a new logon after.
+#
 # -Unattended: starts at boot under stored credentials, no logon and no window at all.
 #   Excel then runs in session 0, where Microsoft does not support it: a modal Excel
 #   dialog (repair/locked file) would hang invisibly and silently stop every later run.
@@ -41,6 +45,8 @@ if (-not (Test-Path $bat)) {
 }
 
 $lockTaskName = "$TaskName-lock"
+$watchdogTaskName = "$TaskName-watchdog"
+$watchdogPs1 = Join-Path $ProjectRoot "cvetopt-watchdog.ps1"
 
 # ExecutionTimeLimit 0 - without it Task Scheduler kills the server after 3 days.
 $settings = New-ScheduledTaskSettingsSet `
@@ -67,6 +73,7 @@ if ($Unattended) {
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $settings -User $UserId -Password $plain -RunLevel Highest -Force | Out-Null
     Unregister-ScheduledTask -TaskName $lockTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $watchdogTaskName -Confirm:$false -ErrorAction SilentlyContinue
 
     Write-Host "OK: task '$TaskName' - starts the cvetopt server at boot as $UserId."
     Write-Host "No console window, no logon needed - but Excel now runs in session 0."
@@ -101,6 +108,18 @@ else {
     else {
         Write-Host "OK: task '$TaskName' - starts cvetopt.bat at logon of $UserId."
     }
+
+    $watchdogArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogPs1`" -ProjectRoot `"$ProjectRoot`""
+    if ($Hidden) { $watchdogArgs += " -Hidden" }
+    $watchdogAction = New-ScheduledTaskAction `
+        -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+        -Argument $watchdogArgs -WorkingDirectory $ProjectRoot
+    $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+        -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+    $watchdogPrincipal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive
+    Register-ScheduledTask -TaskName $watchdogTaskName -Action $watchdogAction -Trigger $watchdogTrigger `
+        -Settings $settings -Principal $watchdogPrincipal -Force | Out-Null
+    Write-Host "OK: task '$watchdogTaskName' - checks every 5 min, restarts the server if it's down."
 
     if ($NoLock) {
         Unregister-ScheduledTask -TaskName $lockTaskName -Confirm:$false -ErrorAction SilentlyContinue
