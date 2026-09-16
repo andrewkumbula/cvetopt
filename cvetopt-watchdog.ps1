@@ -3,7 +3,9 @@
 # accidentally-closed server restarts on its own - without waiting for the next logon
 # or reboot, which the plain "At logon" trigger cannot do.
 #
-# Does nothing if the server is already up or already starting.
+# Does nothing if the server is already up, already starting, or a cvetopt console
+# window is already open (even a stuck one - piling up more never helps and once
+# silently produced ~30 stuck windows overnight when the underlying start hung).
 param(
     [switch]$Hidden,
     [string]$ProjectRoot = $PSScriptRoot
@@ -19,11 +21,14 @@ function Test-ServerUp {
     }
 }
 
-# python.exe уже есть - сервер работает или ещё грузится, второй экземпляр не нужен.
 if (Get-Process -Name python -ErrorAction SilentlyContinue) {
     exit 0
 }
 if (Test-ServerUp) {
+    exit 0
+}
+if (Get-Process -Name cmd -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -like "cvetopt*" }) {
     exit 0
 }
 
