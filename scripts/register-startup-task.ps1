@@ -6,9 +6,15 @@
 #   Pair it with Sysinternals Autologon so a reboot needs no human - see README_WIN.md §5.
 #   Excel COM is only supported in an interactive session, which is why this is the default.
 #
-# -Hidden: same interactive session, but the console window is hidden (via cvetopt-hidden.vbs).
-#   Excel is unaffected - only the window goes away. Task Scheduler stops tracking the server
-#   process, so the task reads Ready while it runs; stop it with cvetopt-stop.bat.
+# -Minimized: same interactive session, console window starts minimized to the taskbar -
+#   much less likely to be closed by accident than a window sitting on the desktop.
+#
+# -Hidden: same interactive session, but the console window is hidden entirely (via
+#   cvetopt-hidden.vbs, using wscript.exe). On at least one server this failed silently
+#   when triggered by Task Scheduler (LastTaskResult 1, nothing started) despite running
+#   fine when launched by hand - a wscript/Task-Scheduler quirk, not a script bug. If that
+#   happens, use -Minimized instead. Task Scheduler also stops tracking the server process
+#   under -Hidden, so the task reads Ready while it runs; stop it with cvetopt-stop.bat.
 #
 # Also registers a watchdog task that checks every 5 minutes and restarts the server if it's
 # down - "At logon" only fires once per actual logon, so on its own it cannot recover from a
@@ -28,6 +34,7 @@ param(
     [switch]$Unattended,
     [System.Security.SecureString]$Password,
     [switch]$Hidden,
+    [switch]$Minimized,
     [switch]$NoLock,
     [string]$ProjectRoot,
     [string]$TaskName = "cvetopt-autostart"
@@ -92,6 +99,12 @@ else {
             -Argument "`"$vbs`"" `
             -WorkingDirectory $ProjectRoot
     }
+    elseif ($Minimized) {
+        $action = New-ScheduledTaskAction `
+            -Execute "$env:SystemRoot\System32\cmd.exe" `
+            -Argument "/c start `"`" /min `"$bat`"" `
+            -WorkingDirectory $ProjectRoot
+    }
     else {
         $action = New-ScheduledTaskAction -Execute $bat -WorkingDirectory $ProjectRoot
     }
@@ -105,12 +118,16 @@ else {
         Write-Host "No console window. wscript exits at once, so the task shows Ready while the"
         Write-Host "server runs on - stop it with cvetopt-stop.bat, not through Task Scheduler."
     }
+    elseif ($Minimized) {
+        Write-Host "OK: task '$TaskName' - starts cvetopt.bat minimized at logon of $UserId."
+    }
     else {
         Write-Host "OK: task '$TaskName' - starts cvetopt.bat at logon of $UserId."
     }
 
     $watchdogArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogPs1`" -ProjectRoot `"$ProjectRoot`""
     if ($Hidden) { $watchdogArgs += " -Hidden" }
+    if ($Minimized) { $watchdogArgs += " -Minimized" }
     $watchdogAction = New-ScheduledTaskAction `
         -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
         -Argument $watchdogArgs -WorkingDirectory $ProjectRoot

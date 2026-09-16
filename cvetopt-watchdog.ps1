@@ -8,6 +8,7 @@
 # silently produced ~30 stuck windows overnight when the underlying start hung).
 param(
     [switch]$Hidden,
+    [switch]$Minimized,
     [string]$ProjectRoot = $PSScriptRoot
 )
 
@@ -36,6 +37,10 @@ if ($Hidden) {
     Start-Process -FilePath "$env:SystemRoot\System32\wscript.exe" `
         -ArgumentList "`"$(Join-Path $ProjectRoot 'cvetopt-hidden.vbs')`"" `
         -WorkingDirectory $ProjectRoot
+}
+elseif ($Minimized) {
+    Start-Process -FilePath (Join-Path $ProjectRoot "cvetopt.bat") -WorkingDirectory $ProjectRoot `
+        -WindowStyle Minimized
 }
 else {
     Start-Process -FilePath (Join-Path $ProjectRoot "cvetopt.bat") -WorkingDirectory $ProjectRoot
