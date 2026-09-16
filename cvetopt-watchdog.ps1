@@ -39,8 +39,11 @@ if ($Hidden) {
         -WorkingDirectory $ProjectRoot
 }
 elseif ($Minimized) {
-    Start-Process -FilePath (Join-Path $ProjectRoot "cvetopt.bat") -WorkingDirectory $ProjectRoot `
-        -WindowStyle Minimized
+    # Same reasoning as register-startup-task.ps1: minimize cmd.exe itself, not the .bat
+    # via file association, or the window style is often ignored.
+    Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" `
+        -ArgumentList "/c `"$(Join-Path $ProjectRoot 'cvetopt.bat')`"" `
+        -WorkingDirectory $ProjectRoot -WindowStyle Minimized
 }
 else {
     Start-Process -FilePath (Join-Path $ProjectRoot "cvetopt.bat") -WorkingDirectory $ProjectRoot

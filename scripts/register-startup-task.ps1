@@ -100,9 +100,11 @@ else {
             -WorkingDirectory $ProjectRoot
     }
     elseif ($Minimized) {
+        # /min on the .bat itself is often lost (Windows launches it via file association,
+        # not directly) - minimize the cmd.exe that actually runs it instead.
         $action = New-ScheduledTaskAction `
             -Execute "$env:SystemRoot\System32\cmd.exe" `
-            -Argument "/c start `"`" /min `"$bat`"" `
+            -Argument "/c start `"`" /min cmd /c `"$bat`"" `
             -WorkingDirectory $ProjectRoot
     }
     else {
