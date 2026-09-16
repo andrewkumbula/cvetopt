@@ -27,17 +27,21 @@ set "UV_CMD="
 set "VENV_PY=%ROOT%.venv\Scripts\python.exe"
 
 REM Prefer project .venv FIRST - avoid "where uv/python" hanging on bad PATH entries.
+REM No findstr here on purpose: spawning it has been observed to hang for days on this
+REM server (orphaned findstr.exe processes, cmd.exe itself stays Responding=True) - use
+REM built-in string substitution instead, which never spawns an external process.
 echo [cvetopt] checking .venv ...
 if exist "%VENV_PY%" (
-  findstr /I /C:"\Users\" "%ROOT%.venv\pyvenv.cfg" >nul 2>nul
-  if not errorlevel 1 (
-    findstr /I /C:"\AppData\" "%ROOT%.venv\pyvenv.cfg" >nul 2>nul
-    if not errorlevel 1 (
-      echo [cvetopt] .venv points to per-user AppData Python - other accounts cannot use it.
-      echo [cvetopt] Under admin run: fix-venv-for-all-users.bat
-      if not "%CVETOPT_HIDDEN%"=="1" pause
-      exit /b 1
-    )
+  set "VENV_PER_USER=0"
+  for /f "usebackq delims=" %%L in ("%ROOT%.venv\pyvenv.cfg") do (
+    set "LINE=%%L"
+    if not "!LINE:\Users\=!"=="!LINE!" if not "!LINE:\AppData\=!"=="!LINE!" set "VENV_PER_USER=1"
+  )
+  if "!VENV_PER_USER!"=="1" (
+    echo [cvetopt] .venv points to per-user AppData Python - other accounts cannot use it.
+    echo [cvetopt] Under admin run: fix-venv-for-all-users.bat
+    if not "%CVETOPT_HIDDEN%"=="1" pause
+    exit /b 1
   )
   set "UV_MODE=venv"
   echo [cvetopt] mode: venv
