@@ -166,10 +166,110 @@ def _(tmp: Path) -> None:
     assert group_orders_by_flight_date([]) == {}
 
 
+# === Корнер-кейсы разбора имени файла ================================================
+
+
+@test("5.1 order_ids_from_biflorica_report: висячий «+» в конце — не парсится")
+def _(tmp: Path) -> None:
+    p = Path("BiFlorica-123+__2026-09-12.xlsx")
+    assert order_ids_from_biflorica_report(p) == [], order_ids_from_biflorica_report(p)
+    assert flight_date_from_biflorica_report(p) is None
+
+
+@test("5.2 order_ids_from_biflorica_report: висячий «+» в начале — не парсится")
+def _(tmp: Path) -> None:
+    p = Path("BiFlorica-+123__2026-09-12.xlsx")
+    assert order_ids_from_biflorica_report(p) == []
+
+
+@test("5.3 order_ids_from_biflorica_report: двойной «++» — не парсится")
+def _(tmp: Path) -> None:
+    p = Path("BiFlorica-123++456__2026-09-12.xlsx")
+    assert order_ids_from_biflorica_report(p) == []
+
+
+@test("5.4 order_ids_from_biflorica_report: регистр префикса не важен")
+def _(tmp: Path) -> None:
+    p = Path("biflorica-123__2026-09-12.xlsx")
+    assert order_ids_from_biflorica_report(p) == ["123"]
+    p2 = Path("BIFLORICA-123+456__2026-09-12.xlsx")
+    assert order_ids_from_biflorica_report(p2) == ["123", "456"]
+
+
+@test("5.5 biflorica_download_filename ↔ order_ids_from_biflorica_report: группа из 5, roundtrip")
+def _(tmp: Path) -> None:
+    ids = ["1", "22", "333", "4444", "55555"]
+    name = biflorica_download_filename(ids, date(2026, 12, 31))
+    assert order_ids_from_biflorica_report(Path(name)) == ids, (name, order_ids_from_biflorica_report(Path(name)))
+    assert flight_date_from_biflorica_report(Path(name)) == date(2026, 12, 31)
+
+
+@test("5.6 flight_date_from_biflorica_report: синтаксически похожая, но невалидная дата")
+def _(tmp: Path) -> None:
+    # Регулярка проверяет только форму ДДДД-ДД-ДД, не календарь — месяц 13 не бывает.
+    p = Path("BiFlorica-123__2026-13-45.xlsx")
+    assert order_ids_from_biflorica_report(p) == ["123"], "id должен разобраться, дата — нет"
+    assert flight_date_from_biflorica_report(p) is None
+
+
+@test("5.7 order_ids_from_biflorica_report: id с ведущими нулями — не теряются")
+def _(tmp: Path) -> None:
+    p = Path("BiFlorica-00123+00456__2026-09-12.xlsx")
+    assert order_ids_from_biflorica_report(p) == ["00123", "00456"]
+
+
+@test("5.8 order_ids_from_biflorica_report: посторонний Biflorica-файл без id (biflorica-deals…)")
+def _(tmp: Path) -> None:
+    # Такие имена ловит _is_biflorica_report_to_archive отдельной проверкой на префикс
+    # "biflorica", но order_ids из них не достать — это ожидаемо, не баг.
+    p = Path("Biflorica-deals-export.xlsx")
+    assert order_ids_from_biflorica_report(p) == []
+
+
+@test("5.9 archive_candidate: файл без разбираемых id, policy=unregistered_only → архивировать")
+def _(tmp: Path) -> None:
+    # order_ids=[] по определению не входит ни в один keep_order_ids — такой файл
+    # всегда считается «неучтённым» и уходит в архив при уборке до скачивания.
+    p = Path("Biflorica-deals-export.xlsx")
+    assert _biflorica_archive_candidate(
+        p, policy="unregistered_only", keep_order_ids={"1", "2", "3"}, keep_paths=set()
+    ) is True
+
+
+@test("5.10 archive_candidate: группа из трёх, зарегистрирован только средний → оставить")
+def _(tmp: Path) -> None:
+    p = Path("BiFlorica-111+222+333__2026-09-12.xlsx")
+    assert _biflorica_archive_candidate(
+        p, policy="unregistered_only", keep_order_ids={"222"}, keep_paths=set()
+    ) is False
+
+
+@test("5.11 group_orders_by_flight_date: одна дата, много заказов — порядок сохраняется")
+def _(tmp: Path) -> None:
+    orders = [
+        Order(portal_id="biflorica", order_id=str(i), flight_date=date(2026, 9, 12))
+        for i in range(1, 8)
+    ]
+    groups = group_orders_by_flight_date(orders)
+    assert len(groups) == 1
+    assert [o.order_id for o in groups[date(2026, 9, 12)]] == [str(i) for i in range(1, 8)]
+
+
+@test("5.12 group_orders_by_flight_date: все заказы на разные даты — по одной группе каждый")
+def _(tmp: Path) -> None:
+    orders = [
+        Order(portal_id="biflorica", order_id=str(i), flight_date=date(2026, 9, i))
+        for i in range(1, 6)
+    ]
+    groups = group_orders_by_flight_date(orders)
+    assert len(groups) == 5
+    assert all(len(v) == 1 for v in groups.values())
+
+
 # === archive_biflorica_download_dir целиком, на реальных файлах =====================
 
 
-@test("4.1 archive_biflorica_download_dir: смешанный набор — сверено файл за файлом")
+@test("6.1 archive_biflorica_download_dir: смешанный набор — сверено файл за файлом")
 def _(tmp: Path) -> None:
     download_dir = tmp / "download"
     archive_dir = tmp / "архив"
@@ -207,7 +307,7 @@ def _(tmp: Path) -> None:
     assert "BiFlorica-10800933+10801161__2026-09-12.xlsx" in kept, kept
 
 
-@test("4.2 archive_biflorica_download_dir: policy=stale_registered — сессия защищена")
+@test("6.2 archive_biflorica_download_dir: policy=stale_registered — сессия защищена")
 def _(tmp: Path) -> None:
     download_dir = tmp / "download"
     archive_dir = tmp / "архив"

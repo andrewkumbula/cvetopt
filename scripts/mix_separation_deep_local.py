@@ -34,6 +34,7 @@ from cvetopt.invoice.biflorica_mixes import (  # noqa: E402
     plan_mix_allocation,
     run_mix_separation,
     scan_mix_pool,
+    _as_qty,
     _biflorica_header,
     _priced_length_labels,
     _stems_for_length,
@@ -566,6 +567,139 @@ def _(tmp: Path) -> None:
     run_mix_separation(template_path=tpl, biflorica_path=bif, log=lambda _m: None)
     backups = list(tmp.glob("bif до миксов*.xlsx"))
     assert len(backups) == 1, list(tmp.iterdir())
+
+
+# === Этап 6: корнер-кейсы ============================================================
+
+
+@test("6.1 parse_sklad_template: реальный шаблон — берёт ПЕРВУЮ таблицу «Эквадор», не вторую")
+def _(tmp: Path) -> None:
+    # В реальном шаблоне ДВЕ таблицы с меткой «Эквадор»: роза/микс (строка 8) и
+    # гвоздика (строка 19) — обе с теми же колонками длин. Разбор должен остановиться
+    # на первой и не приплюсовать гвоздичные позиции к спросу на миксы.
+    template = ROOT / "шаблоны тест" / "Шаблон 11.08.26.xlsx"
+    if not template.is_file():
+        print("    (пропуск — нет архивного шаблона на этой машине)")
+        return
+    demand = parse_sklad_template(template)
+    codes = {ln.code for ln in demand.lines}
+    assert "Mix R" in codes and "Mondial" in codes, codes
+    assert not any("Гвоздика" in ln.title_ru for ln in demand.lines), [
+        ln.title_ru for ln in demand.lines
+    ]
+
+
+@test("6.2 parse_sklad_template: регистр и пробелы в метке «Эквадор» не важны")
+def _(tmp: Path) -> None:
+    tpl = make_template(tmp / "tpl.xlsx", [{"code": "A", "title": "A", "qtys": {"60": 10}}])
+    from openpyxl import load_workbook
+    wb = load_workbook(tpl)
+    ws = wb.active
+    ws["C8"] = "  ЭКВАДОР  "  # верхний регистр + пробелы вместо "Эквадор"
+    wb.save(tpl)
+    wb.close()
+    demand = parse_sklad_template(tpl)
+    assert demand.totals["60"] == 10, demand.totals
+
+
+@test("6.3 parse_sklad_template: код и в B, и в C одновременно — код берётся из B")
+def _(tmp: Path) -> None:
+    tpl = make_template(tmp / "tpl.xlsx", [{"code": "FromC", "title": "T", "qtys": {"60": 5}}])
+    from openpyxl import load_workbook
+    wb = load_workbook(tpl)
+    ws = wb.active
+    ws["B8"] = "Эквадор"  # метка теперь и в B — приоритет колонки B над C
+    ws["B9"] = "FromB"
+    wb.save(tpl)
+    wb.close()
+    demand = parse_sklad_template(tpl)
+    assert demand.lines[0].code == "FromB", demand.lines[0].code
+
+
+@test("6.4 _as_qty: отрицательные и текстовые значения → 0, не падают и не уходят в минус")
+def _(tmp: Path) -> None:
+    assert _as_qty(-5) == 0
+    assert _as_qty("-5") == 0
+    assert _as_qty("н/д") == 0
+    assert _as_qty("") == 0
+    assert _as_qty(None) == 0
+    assert _as_qty("12.6") == 13  # обычное округление продолжает работать
+
+
+@test("6.5 _stems_for_length: пробелы вокруг «|» в сплит-строке не портят разбор")
+def _(tmp: Path) -> None:
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "P1", "variety": "Mix", "prices": {"60": 0.2, "70": 0.2},
+         "stems": " 300 | 150 "},
+    ])
+    grid = grid_by_row(read_excel_grid(bif))
+    header_row, length_map = _biflorica_header(grid, bif)
+    row = grid[header_row + 1]
+    assert _stems_for_length(row, "60", length_map) == 300
+    assert _stems_for_length(row, "70", length_map) == 150
+
+
+@test("6.6a apply: сплит-строка 50|60 — ОБЕ целевые длины взяты полностью → строка удаляется")
+def _(tmp: Path) -> None:
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "P1", "variety": "Mix", "prices": {"50": 0.2, "60": 0.2}, "stems": "100|50"},
+    ])
+    tpl = make_template(tmp / "tpl.xlsx", [
+        {"code": "A", "title": "A", "qtys": {"50": 100}},
+        {"code": "B", "title": "B", "qtys": {"60": 50}},
+    ])
+    demand = parse_sklad_template(tpl)
+    plans = plan_mix_allocation(demand, bif, log=lambda _m: None)
+    out = apply_mix_plans_to_biflorica(bif, plans, log=lambda _m: None)
+    assert mix_row(out, "P1") is None, "обе целевые длины выбраны без остатка — строка должна исчезнуть"
+
+
+@test("6.6b apply: сплит-строка 60|70 — 60 выбрано полностью, 70 НЕ целевая длина, не трогаем")
+def _(tmp: Path) -> None:
+    # Ключевая защита из коммита 8122d2a: 70см никогда не входит в спрос миксов
+    # (_TARGET_LENGTHS = 50/60) — даже если делить с 60см полностью нечего, 70см
+    # в той же строке остаётся как было, строка не удаляется.
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "P1", "variety": "Mix", "prices": {"60": 0.2, "70": 0.2}, "stems": "100|50"},
+    ])
+    tpl = make_template(tmp / "tpl.xlsx", [{"code": "A", "title": "A", "qtys": {"60": 100}}])
+    demand = parse_sklad_template(tpl)
+    plans = plan_mix_allocation(demand, bif, log=lambda _m: None)
+    out = apply_mix_plans_to_biflorica(bif, plans, log=lambda _m: None)
+    row = mix_row(out, "P1")
+    assert row is not None, "70см не в спросе — строка не должна исчезать"
+    assert row.get("G") is None, row  # цена 60 очищена — эта длина выбрана полностью
+    assert row.get("H") == "0.2", row  # цена 70 нетронута
+    assert row["O"] == "50", row  # только 70см — единственная оставшаяся длина
+
+
+@test("6.7 parse_sklad_template: одинаковый код в двух строках — считаются раздельно")
+def _(tmp: Path) -> None:
+    tpl = make_template(tmp / "tpl.xlsx", [
+        {"code": "Dup", "title": "Первая", "qtys": {"60": 20}},
+        {"code": "Dup", "title": "Вторая", "qtys": {"60": 30}},
+    ])
+    demand = parse_sklad_template(tpl)
+    assert len(demand.lines) == 2, demand.lines
+    assert demand.totals["60"] == 50, demand.totals
+    codes = [ln.code for ln in demand.lines]
+    assert codes == ["Dup", "Dup"], codes
+
+
+@test("6.8 parse_sklad_template: таблица «Эквадор» есть, но без 50/60 (только 70/80) → ошибка")
+def _(tmp: Path) -> None:
+    # Разбор миксов работает только с длинами 50/60 — таблица без них не должна
+    # молча давать пустой спрос, а должна явно сообщать, что подходящей таблицы нет.
+    tpl = make_template(
+        tmp / "tpl.xlsx",
+        [{"code": "A", "title": "A", "qtys": {"70": 60, "80": 10}}],
+        lengths=("70", "80"),
+    )
+    try:
+        parse_sklad_template(tpl)
+        raise AssertionError("должно было упасть — нет колонок 50/60")
+    except RuntimeError as e:
+        assert "50" in str(e) or "60" in str(e), e
 
 
 # === Раннер ===========================================================================
