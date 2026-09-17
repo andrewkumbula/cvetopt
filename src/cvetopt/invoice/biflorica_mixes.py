@@ -1,6 +1,6 @@
 """
 Разбор миксов: заполненный «Шаблон ДД.ММ.ГГ» + Biflorica Mix →
-отдельные позиции с средневзвешенной ценой (только длины 50 и 60).
+отдельные позиции с средневзвешенной ценой (длины 50, 60 и 70).
 """
 
 from __future__ import annotations
@@ -29,8 +29,9 @@ from cvetopt.invoice.xlsx_read import (
 
 LogFn = Callable[[str], None]
 
-# По инструкции в шаблоне: отделяем только от Микс 50 и 60 см.
-_TARGET_LENGTHS = ("50", "60")
+# Длины, которые разбор миксов вообще трогает; остальные (40, 80, 90, 100…) — только
+# для распознавания шапки таблицы, их спрос и остаток не считаются.
+_TARGET_LENGTHS = ("50", "60", "70")
 _FILLED_TEMPLATE_STEM_RE = re.compile(
     r"^ша[бю]лон\s+.+$",  # шаблон / Шаблон / шаюлон (опечатки)
     re.IGNORECASE,
@@ -148,16 +149,18 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
         found: dict[str, str] = {}
         for col, val in cells.items():
             label = _norm(val)
-            if label in _TARGET_LENGTHS or label in {"70", "80", "40", "90", "100"}:
+            if label in _TARGET_LENGTHS or label in {"80", "40", "90", "100"}:
                 found[label] = col
-        if "50" in found or "60" in found:
+        if any(lab in found for lab in _TARGET_LENGTHS):
             header_row = row_no
             code_col = ecuador_col
             length_cols = found
             break
 
     if header_row is None:
-        raise RuntimeError(f"В {path.name} нет таблицы Эквадор с длинами 50/60")
+        raise RuntimeError(
+            f"В {path.name} нет таблицы Эквадор с длинами {'/'.join(_TARGET_LENGTHS)}"
+        )
 
     lines: list[TemplateLine] = []
     totals: dict[str, int] = {lab: 0 for lab in _TARGET_LENGTHS}
@@ -665,7 +668,9 @@ def run_mix_separation(
     )
     plans = plan_mix_allocation(demand, biflorica_path, log=_lg)
     if not plans:
-        raise RuntimeError("Миксы: в шаблоне нет заполненных 50/60 для разбора")
+        raise RuntimeError(
+            f"Миксы: в шаблоне нет заполненных {'/'.join(_TARGET_LENGTHS)} для разбора"
+        )
     out = apply_mix_plans_to_biflorica(biflorica_path, plans, log=_lg)
     return demand, plans, out
 

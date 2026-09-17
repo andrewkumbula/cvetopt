@@ -148,13 +148,13 @@ def _(tmp: Path) -> None:
         {"code": "Mondial", "title": "Роза Мондиаль", "qtys": {"60": 50}},
     ])
     demand = parse_sklad_template(tpl)
-    assert demand.totals == {"50": 25, "60": 75}, demand.totals
+    assert demand.totals == {"50": 25, "60": 75, "70": 0}, demand.totals
     assert len(demand.lines) == 2, demand.lines
     assert demand.lines[0].code == "Mix R"
-    assert demand.lines[0].qtys == {"50": 25, "60": 25}
-    # "50" присутствует в шапке (общая для всех строк) — попадает в qtys нулём,
+    assert demand.lines[0].qtys == {"50": 25, "60": 25, "70": 0}
+    # "50"/"70" присутствуют в шапке (общая для всех строк) — попадают в qtys нулём,
     # раз в этой конкретной строке значения нет.
-    assert demand.lines[1].qtys == {"50": 0, "60": 50}
+    assert demand.lines[1].qtys == {"50": 0, "60": 50, "70": 0}
 
 
 @test("1.2 parse_sklad_template: строки с нулевым спросом всё равно попадают в lines")
@@ -654,23 +654,23 @@ def _(tmp: Path) -> None:
     assert mix_row(out, "P1") is None, "обе целевые длины выбраны без остатка — строка должна исчезнуть"
 
 
-@test("6.6b apply: сплит-строка 60|70 — 60 выбрано полностью, 70 НЕ целевая длина, не трогаем")
+@test("6.6b apply: сплит-строка 60|80 — 60 выбрано полностью, 80 НЕ целевая длина, не трогаем")
 def _(tmp: Path) -> None:
-    # Ключевая защита из коммита 8122d2a: 70см никогда не входит в спрос миксов
-    # (_TARGET_LENGTHS = 50/60) — даже если делить с 60см полностью нечего, 70см
-    # в той же строке остаётся как было, строка не удаляется.
+    # 80см никогда не входит в спрос миксов (_TARGET_LENGTHS = 50/60/70) — даже если
+    # делить с 60см полностью нечего, 80см в той же строке остаётся как было,
+    # строка не удаляется (та же защита из коммита 8122d2a).
     bif = make_biflorica(tmp / "bif.xlsx", [
-        {"plantation": "P1", "variety": "Mix", "prices": {"60": 0.2, "70": 0.2}, "stems": "100|50"},
+        {"plantation": "P1", "variety": "Mix", "prices": {"60": 0.2, "80": 0.2}, "stems": "100|50"},
     ])
     tpl = make_template(tmp / "tpl.xlsx", [{"code": "A", "title": "A", "qtys": {"60": 100}}])
     demand = parse_sklad_template(tpl)
     plans = plan_mix_allocation(demand, bif, log=lambda _m: None)
     out = apply_mix_plans_to_biflorica(bif, plans, log=lambda _m: None)
     row = mix_row(out, "P1")
-    assert row is not None, "70см не в спросе — строка не должна исчезать"
+    assert row is not None, "80см не в спросе — строка не должна исчезать"
     assert row.get("G") is None, row  # цена 60 очищена — эта длина выбрана полностью
-    assert row.get("H") == "0.2", row  # цена 70 нетронута
-    assert row["O"] == "50", row  # только 70см — единственная оставшаяся длина
+    assert row.get("I") == "0.2", row  # цена 80 нетронута
+    assert row["O"] == "50", row  # только 80см — единственная оставшаяся длина
 
 
 @test("6.7 parse_sklad_template: одинаковый код в двух строках — считаются раздельно")
@@ -686,20 +686,129 @@ def _(tmp: Path) -> None:
     assert codes == ["Dup", "Dup"], codes
 
 
-@test("6.8 parse_sklad_template: таблица «Эквадор» есть, но без 50/60 (только 70/80) → ошибка")
+@test("6.8 parse_sklad_template: таблица «Эквадор» есть, но без 50/60/70 (только 80) → ошибка")
 def _(tmp: Path) -> None:
-    # Разбор миксов работает только с длинами 50/60 — таблица без них не должна
+    # Разбор миксов работает только с длинами 50/60/70 — таблица без них не должна
     # молча давать пустой спрос, а должна явно сообщать, что подходящей таблицы нет.
     tpl = make_template(
         tmp / "tpl.xlsx",
-        [{"code": "A", "title": "A", "qtys": {"70": 60, "80": 10}}],
-        lengths=("70", "80"),
+        [{"code": "A", "title": "A", "qtys": {"80": 10}}],
+        lengths=("80",),
     )
     try:
         parse_sklad_template(tpl)
         raise AssertionError("должно было упасть — нет колонок 50/60")
     except RuntimeError as e:
         assert "50" in str(e) or "60" in str(e), e
+
+
+# === Этап 7: 70см — полноценная целевая длина (наравне с 50/60) ====================
+
+
+@test("7.1 parse_sklad_template: спрос по 70 см учитывается в totals и qtys")
+def _(tmp: Path) -> None:
+    tpl = make_template(tmp / "tpl.xlsx", [
+        {"code": "A", "title": "A", "qtys": {"70": 40}},
+    ])
+    demand = parse_sklad_template(tpl)
+    assert demand.totals["70"] == 40, demand.totals
+    assert demand.lines[0].qtys["70"] == 40
+
+
+@test("7.2 scan_mix_pool: остаток Mix 70 см читается так же, как 50/60")
+def _(tmp: Path) -> None:
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "P1", "variety": "Mix", "prices": {"70": 0.22}, "stems": 300},
+        {"plantation": "P2", "variety": "Explorer", "prices": {"70": 0.30}, "stems": 500},  # не Mix
+    ])
+    grid = grid_by_row(read_excel_grid(bif))
+    header_row, length_map = _biflorica_header(grid, bif)
+    pool = scan_mix_pool(grid, header_row, length_map, "70")
+    assert len(pool) == 1, pool
+    assert pool[0].plantation == "P1" and pool[0].stems == 300
+
+
+@test("7.3 plan_mix_allocation: 70 см распределяется жадно по цене, как 50/60")
+def _(tmp: Path) -> None:
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "cheap", "variety": "Mix", "prices": {"70": 0.10}, "stems": 1000},
+        {"plantation": "expensive", "variety": "Mix", "prices": {"70": 0.30}, "stems": 50},
+    ])
+    tpl = make_template(tmp / "tpl.xlsx", [{"code": "A", "title": "A", "qtys": {"70": 100}}])
+    demand = parse_sklad_template(tpl)
+    plans = plan_mix_allocation(demand, bif, log=lambda _m: None)
+    assert len(plans) == 1 and plans[0].length == "70"
+    assert plans[0].takes[0].plantation == "expensive" and plans[0].takes[0].take_qty == 50
+    assert plans[0].takes[1].plantation == "cheap" and plans[0].takes[1].take_qty == 50
+
+
+@test("7.4 plan_mix_allocation: нехватка остатка на 70 см → та же понятная ошибка")
+def _(tmp: Path) -> None:
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "P1", "variety": "Mix", "prices": {"70": 0.2}, "stems": 100},
+    ])
+    tpl = make_template(tmp / "tpl.xlsx", [{"code": "A", "title": "A", "qtys": {"70": 500}}])
+    demand = parse_sklad_template(tpl)
+    try:
+        plan_mix_allocation(demand, bif, log=lambda _m: None)
+        raise AssertionError("должно было упасть — не хватает остатка на 70см")
+    except RuntimeError as e:
+        assert "не хватает" in str(e) and "400" in str(e), e
+
+
+@test("7.5 apply: полное списание строки 70 см удаляет её, как для 50/60")
+def _(tmp: Path) -> None:
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "P1", "variety": "Mix", "prices": {"70": 0.2}, "stems": 100},
+    ])
+    tpl = make_template(tmp / "tpl.xlsx", [{"code": "A", "title": "A", "qtys": {"70": 100}}])
+    demand = parse_sklad_template(tpl)
+    plans = plan_mix_allocation(demand, bif, log=lambda _m: None)
+    out = apply_mix_plans_to_biflorica(bif, plans, log=lambda _m: None)
+    assert mix_row(out, "P1") is None
+
+
+@test("7.6 apply: все три длины 50/60/70 в одной сплит-строке разбираются по отдельности")
+def _(tmp: Path) -> None:
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "P1", "variety": "Mix",
+         "prices": {"50": 0.4, "60": 0.4, "70": 0.4}, "stems": "40|60|20"},
+    ])
+    tpl = make_template(tmp / "tpl.xlsx", [
+        {"code": "A", "title": "A", "qtys": {"50": 40}},   # выбрана полностью
+        {"code": "B", "title": "B", "qtys": {"60": 30}},   # частично (было 60)
+        {"code": "C", "title": "C", "qtys": {"70": 20}},   # выбрана полностью
+    ])
+    demand = parse_sklad_template(tpl)
+    plans = plan_mix_allocation(demand, bif, log=lambda _m: None)
+    assert {p.length for p in plans} == {"50", "60", "70"}, [p.length for p in plans]
+    out = apply_mix_plans_to_biflorica(bif, plans, log=lambda _m: None)
+    row = mix_row(out, "P1")
+    assert row is not None, "60см осталось 30 — строка должна выжить"
+    assert row.get("F") is None, row  # 50 выбрана полностью — цена очищена
+    assert row.get("G") == "0.4", row  # 60 частично осталась
+    assert row.get("H") is None, row  # 70 выбрана полностью — цена очищена
+    assert row["O"] == "30", row  # единственная оставшаяся длина — просто число
+
+
+@test("7.7 run_mix_separation: реальный вертикальный срез — 70см вместе с 50/60 в одном прогоне")
+def _(tmp: Path) -> None:
+    bif = make_biflorica(tmp / "bif.xlsx", [
+        {"plantation": "P50", "variety": "Mix", "prices": {"50": 0.2}, "stems": 100},
+        {"plantation": "P60", "variety": "Mix", "prices": {"60": 0.2}, "stems": 100},
+        {"plantation": "P70", "variety": "Mix", "prices": {"70": 0.2}, "stems": 100},
+    ])
+    tpl = make_template(tmp / "tpl.xlsx", [
+        {"code": "A", "title": "A", "qtys": {"50": 100}},
+        {"code": "B", "title": "B", "qtys": {"60": 100}},
+        {"code": "C", "title": "C", "qtys": {"70": 100}},
+    ])
+    demand, plans, out = run_mix_separation(template_path=tpl, biflorica_path=bif, log=lambda _m: None)
+    assert {p.length for p in plans} == {"50", "60", "70"}, [p.length for p in plans]
+    for plant in ("P50", "P60", "P70"):
+        assert mix_row(out, plant) is None, f"{plant} должен был полностью разобраться"
+    new_codes = {c.get("D") for c in biflorica_rows(out).values() if c.get("D") in {"A", "B", "C"}}
+    assert new_codes == {"A", "B", "C"}, new_codes
 
 
 # === Раннер ===========================================================================
