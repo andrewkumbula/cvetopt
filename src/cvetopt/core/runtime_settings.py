@@ -7,6 +7,7 @@ import shutil
 import stat
 import sys
 import time
+from collections.abc import Sequence
 from datetime import date, datetime
 from pathlib import Path
 
@@ -42,24 +43,53 @@ BIFLORICA_ARCHIVE_LEGACY_NAMES = frozenset({"архив", "archive"})
 BIFLORICA_DOWNLOAD_PREFIX = "BiFlorica-"
 # Скрипт: BiFlorica-<order_id>__<YYYY-MM-DD>.xlsx; старые без префикса тоже в архив.
 _BIFLORICA_REPORT_STEM_RE = re.compile(
-    r"^(?:BiFlorica-)?\d+__\d{4}-\d{2}-\d{2}$",
+    r"^(?:BiFlorica-)?\d+(?:\+\d+)*__\d{4}-\d{2}-\d{2}$",
     re.IGNORECASE,
 )
-_BIFLORICA_ORDER_ID_FROM_FILE_RE = re.compile(
-    r"^(?:BiFlorica-)?(\d+)__\d{4}-\d{2}-\d{2}$",
+# Несколько заказов с одной датой вылета скачиваются одним файлом (как при выборе
+# нескольких галочек на портале) — order_id через «+»: BiFlorica-111+222__2026-09-12.xlsx.
+_BIFLORICA_ORDER_IDS_FROM_FILE_RE = re.compile(
+    r"^(?:BiFlorica-)?(\d+(?:\+\d+)*)__(\d{4}-\d{2}-\d{2})$",
     re.IGNORECASE,
 )
 
 
-def biflorica_download_filename(order_id: str, flight_date: date) -> str:
-    """Имя xlsx отчёта в папке скачивания (префикс BiFlorica- для отличия от прочих файлов)."""
-    return f"{BIFLORICA_DOWNLOAD_PREFIX}{order_id}__{flight_date.isoformat()}.xlsx"
+def biflorica_download_filename(order_ids: Sequence[str], flight_date: date) -> str:
+    """
+    Имя xlsx отчёта в папке скачивания (префикс BiFlorica- для отличия от прочих файлов).
+    Несколько order_id (одна дата вылета, несколько сделок) — один файл, id через «+».
+    """
+    ids = "+".join(str(oid) for oid in order_ids)
+    return f"{BIFLORICA_DOWNLOAD_PREFIX}{ids}__{flight_date.isoformat()}.xlsx"
+
+
+def order_ids_from_biflorica_report(path: Path) -> list[str]:
+    """Все order_id из имени файла — один (обычный отчёт) или несколько (объединённый)."""
+    m = _BIFLORICA_ORDER_IDS_FROM_FILE_RE.match(path.stem)
+    if not m:
+        return []
+    return m.group(1).split("+")
+
+
+def flight_date_from_biflorica_report(path: Path) -> date | None:
+    """Дата вылета из имени BiFlorica-<id[+id...]>__<дата>.xlsx."""
+    m = _BIFLORICA_ORDER_IDS_FROM_FILE_RE.match(path.stem)
+    if not m:
+        return None
+    try:
+        return date.fromisoformat(m.group(2))
+    except ValueError:
+        return None
 
 
 def order_id_from_biflorica_report(path: Path) -> str | None:
-    """Номер заказа из имени BiFlorica-<id>__<дата>.xlsx или <id>__<дата>.xlsx."""
-    m = _BIFLORICA_ORDER_ID_FROM_FILE_RE.match(path.stem)
-    return m.group(1) if m else None
+    """
+    Номер заказа из имени BiFlorica-<id>__<дата>.xlsx или <id>__<дата>.xlsx.
+    Для объединённого файла (несколько заказов) — первый id; чтобы проверить конкретный
+    заказ или весь список, используйте order_ids_from_biflorica_report.
+    """
+    ids = order_ids_from_biflorica_report(path)
+    return ids[0] if ids else None
 
 
 class RuntimeSettings(BaseModel):
@@ -556,10 +586,13 @@ def _biflorica_archive_candidate(
     keep_order_ids: set[str],
     keep_paths: set[Path],
 ) -> bool:
-    order_id = order_id_from_biflorica_report(entry)
+    order_ids = order_ids_from_biflorica_report(entry)
     resolved = entry.resolve()
     if policy == "unregistered_only":
-        return not (order_id and order_id in keep_order_ids)
+        # Объединённый файл (несколько заказов на одну дату вылета) не архивируем, пока
+        # в реестре есть хотя бы один из его заказов — иначе рискуем убрать ещё нужный
+        # файл только из-за того, что в него позже добавился новый непроверенный заказ.
+        return not (order_ids and any(oid in keep_order_ids for oid in order_ids))
     if policy == "stale_registered":
         # В архив всё, кроме отчётов, скачанных в текущей сессии (keep_paths).
         return resolved not in keep_paths

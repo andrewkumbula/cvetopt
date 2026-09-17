@@ -13,7 +13,7 @@ from pathlib import Path
 
 from dateutil import parser as date_parser
 from loguru import logger
-from playwright.async_api import Browser, Download, Locator, Page, async_playwright
+from playwright.async_api import Browser, Download, Page, async_playwright
 
 from cvetopt.core.job_manager import job_log, job_manager, job_step, raise_if_cancelled
 from cvetopt.core.models import Order
@@ -22,7 +22,9 @@ from cvetopt.core.playwright_proxy import apply_playwright_proxy
 from cvetopt.core.runtime_settings import (
     archive_biflorica_download_dir,
     biflorica_download_filename,
+    flight_date_from_biflorica_report,
     load_runtime_settings,
+    order_ids_from_biflorica_report,
     resolve_biflorica_archive_dir,
     resolve_biflorica_download_dir,
 )
@@ -286,48 +288,28 @@ async def _collect_all_orders_paginated(
     return list(seen.values())
 
 
-async def _find_order_row(
+async def _set_order_checkbox(
     page: Page,
-    portal: BifloricaPortalConfig,
     order_id: str,
-    log: LogFn,
-) -> Locator | None:
-    """Ищет строку заказа, обходя страницы с начала."""
-    await page.goto(portal.orders_url, wait_until="domcontentloaded")
-    try:
-        await page.wait_for_load_state("networkidle", timeout=120_000)
-    except Exception:
-        pass
-    await _await_orders_table(page, portal, log)
-    await _ensure_tab_all(page, portal, log)
-    await _rewind_to_first_page(page, portal, log)
-
-    s = portal.selectors
-    while True:
-        row = page.locator(s.orders_table_row).filter(
-            has=page.get_by_text(order_id, exact=True)
-        )
-        if await row.count():
-            return row.first
-        if not await _goto_next_page(page, portal):
-            return None
-
-
-async def _download_order_report(
-    page: Page,
-    portal: BifloricaPortalConfig,
-    order_id: str,
-    dest_path: Path,
-) -> None:
-    """Отмечает заказ и жмёт «Отчет по сделкам». Input скрыт — клик по label; без scroll_into_view на input (Angular)."""
-    s = portal.selectors
+    *,
+    check: bool,
+) -> bool:
+    """
+    Отмечает/снимает галочку заказа на ТЕКУЩЕЙ видимой странице (без навигации).
+    Input скрыт — клик по label; без scroll_into_view на input (Angular).
+    Возвращает True, если строка заказа вообще есть на этой странице.
+    """
     lid = f"list-orders-{order_id}"
     lbl = page.locator(f'#orderController label[for="{lid}"]')
     inp = page.locator(f"#orderController #{lid}")
+    if not await inp.count():
+        return False
 
-    await inp.first.wait_for(state="attached", timeout=30_000)
-    await lbl.first.wait_for(state="attached", timeout=10_000)
-    await page.wait_for_timeout(300)
+    try:
+        if await inp.first.is_checked() == check:
+            return True
+    except Exception:
+        pass
 
     try:
         await inp.first.evaluate(
@@ -349,6 +331,73 @@ async def _download_order_report(
             await page.wait_for_timeout(250)
     if not clicked:
         await inp.first.click(timeout=20_000, force=True)
+    return True
+
+
+async def _walk_pages_setting_checkboxes(
+    page: Page,
+    portal: BifloricaPortalConfig,
+    order_ids: set[str],
+    *,
+    check: bool,
+    log: LogFn,
+) -> set[str]:
+    """Обходит страницы пагинации (без перезагрузки — Next внутри SPA), отмечая/снимая
+    галочки для order_ids по мере того, как их строки попадаются. Возвращает id, которые
+    так и не нашлись ни на одной странице."""
+    pending = set(order_ids)
+    guard = 0
+    while pending and guard < 50:
+        guard += 1
+        for oid in list(pending):
+            try:
+                if await _set_order_checkbox(page, oid, check=check):
+                    pending.discard(oid)
+            except Exception as e:
+                await log(f"Галочка заказа {oid} — ошибка клика: {e}")
+        if not pending:
+            break
+        if not await _goto_next_page(page, portal):
+            break
+    return pending
+
+
+async def _download_group_report(
+    page: Page,
+    portal: BifloricaPortalConfig,
+    order_ids: list[str],
+    dest_path: Path,
+    log: LogFn,
+) -> None:
+    """
+    Отмечает галочками ВСЕ заказы группы (одна дата вылета — одна или несколько сделок,
+    как при ручном выборе нескольких строк на портале) и жмёт «Отчет по сделкам» один
+    раз — получается один файл со всеми сделками группы, а не по файлу на сделку.
+    """
+    s = portal.selectors
+    await page.goto(portal.orders_url, wait_until="domcontentloaded")
+    try:
+        await page.wait_for_load_state("networkidle", timeout=120_000)
+    except Exception:
+        pass
+    await _await_orders_table(page, portal, log)
+    await _ensure_tab_all(page, portal, log)
+    await _rewind_to_first_page(page, portal, log)
+
+    missing = await _walk_pages_setting_checkboxes(
+        page, portal, set(order_ids), check=True, log=log
+    )
+    if missing:
+        # Снимаем то, что успели отметить, чтобы не оставить портал в частично
+        # выбранном состоянии для следующего прогона.
+        await _rewind_to_first_page(page, portal, log)
+        await _walk_pages_setting_checkboxes(
+            page, portal, set(order_ids) - missing, check=False, log=log
+        )
+        raise RuntimeError(
+            f"На портале не найдены заказы группы: {', '.join(sorted(missing))} "
+            f"(дата вылета одна на всех — отчёт для неё не скачан)."
+        )
 
     await page.wait_for_timeout(350)
     btn = page.locator(s.deal_report_button).first
@@ -365,14 +414,19 @@ async def _download_order_report(
         dl: Download = await dl_info.value
         await dl.save_as(str(dest_path))
     finally:
+        # Страница после скачивания могла остаться не на первой — обходим заново.
         try:
-            if await inp.count() and await inp.first.is_checked():
-                try:
-                    await lbl.first.click(timeout=10_000, force=True)
-                except Exception:
-                    await inp.first.click(timeout=10_000, force=True)
-        except Exception:
-            pass
+            await _rewind_to_first_page(page, portal, log)
+            still_checked = await _walk_pages_setting_checkboxes(
+                page, portal, set(order_ids), check=False, log=log
+            )
+            if still_checked:
+                await log(
+                    f"Не удалось снять галочки заказов {', '.join(sorted(still_checked))} "
+                    "после скачивания — на следующем прогоне проверьте вручную."
+                )
+        except Exception as e:
+            await log(f"Снятие галочек после скачивания группы: {e}")
 
 
 async def run_biflorica_job(
@@ -519,19 +573,38 @@ async def run_biflorica_job(
             orders.sort(key=lambda o: o.flight_date)
             await lg(f"Всего уникальных заказов в диапазоне возраста: {len(orders)}")
 
+            # Заказы с одной датой вылета скачиваются одним файлом (как при выборе
+            # нескольких галочек на портале) — иначе они попадают в разные файлы, и
+            # шаги ниже по цепочке (Эквадор, разбор миксов), которые берут «самый
+            # свежий» файл Biflorica, тихо теряют часть сделок.
+            groups: dict[date, list[Order]] = {}
             for order in orders:
+                groups.setdefault(order.flight_date, []).append(order)
+
+            for flight_date, group_orders in groups.items():
                 await raise_if_cancelled(job_id)
-                if order.order_id in downloaded_ids:
-                    await lg(f"Пропуск (уже в реестре): {order.order_id}")
+                order_ids = [o.order_id for o in group_orders]
+                unregistered = [oid for oid in order_ids if oid not in downloaded_ids]
+                if not unregistered:
+                    await lg(
+                        f"Пропуск (уже в реестре): вылет {flight_date}, "
+                        f"заказы {', '.join(order_ids)}"
+                    )
                     continue
-                dest = download_dir / biflorica_download_filename(
-                    order.order_id, order.flight_date
-                )
-                legacy_dest = download_dir / (
-                    f"{order.order_id}__{order.flight_date.isoformat()}.xlsx"
+
+                dest = download_dir / biflorica_download_filename(order_ids, flight_date)
+                if len(order_ids) > 1:
+                    await lg(
+                        f"Вылет {flight_date}: {len(order_ids)} заказов "
+                        f"({', '.join(order_ids)}) — качаю одним файлом"
+                    )
+                legacy_dest = (
+                    download_dir / f"{order_ids[0]}__{flight_date.isoformat()}.xlsx"
+                    if len(order_ids) == 1
+                    else None
                 )
                 existing = dest if dest.exists() else legacy_dest
-                if existing.exists() and existing.stat().st_size > 0:
+                if existing is not None and existing.exists() and existing.stat().st_size > 0:
                     from cvetopt.invoice.biflorica_split import diagnose_biflorica_report
 
                     bad = diagnose_biflorica_report(existing)
@@ -542,20 +615,19 @@ async def run_biflorica_job(
                         )
                         continue
                     await lg(f"Файл уже есть, добавляю в реестр: {existing.name}")
-                    registry.add(order.order_id)
-                    downloaded_ids.add(order.order_id)
+                    for oid in order_ids:
+                        registry.add(oid)
+                        downloaded_ids.add(oid)
                     await job_manager.add_downloaded(job_id, str(existing))
                     continue
 
-                await lg(f"Скачиваю отчёт: заказ {order.order_id}, вылет {order.flight_date}")
+                await lg(
+                    f"Скачиваю отчёт: вылет {flight_date}, заказы {', '.join(order_ids)}"
+                )
                 try:
-                    row = await _find_order_row(page, portal, order.order_id, lg)
-                    if row is None:
-                        await lg(f"Строка заказа {order.order_id} не найдена при обходе страниц")
-                        continue
-                    await _download_order_report(page, portal, order.order_id, dest)
+                    await _download_group_report(page, portal, order_ids, dest, lg)
                 except Exception as e:
-                    await lg(f"Ошибка скачивания {order.order_id}: {e}")
+                    await lg(f"Ошибка скачивания группы {order_ids}: {e}")
                     logger.exception("download failed")
                     continue
 
@@ -573,8 +645,9 @@ async def run_biflorica_job(
                         pass
                     continue
 
-                registry.add(order.order_id)
-                downloaded_ids.add(order.order_id)
+                for oid in order_ids:
+                    registry.add(oid)
+                    downloaded_ids.add(oid)
                 await job_manager.add_downloaded(job_id, str(dest))
                 session_downloaded_paths.add(dest.resolve())
                 await lg(f"Сохранено: {dest}")
