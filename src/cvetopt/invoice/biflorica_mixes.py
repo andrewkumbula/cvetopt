@@ -244,6 +244,18 @@ def _stems_for_length(
     return 0
 
 
+def _row_stems_by_length(
+    cells: dict[str, object],
+    length_map: dict[str, str],
+) -> dict[str, int]:
+    """
+    Стебли строки, разложенные по всем присутствующим длинам (учитывая формат
+    «300|150», когда одна сделка сразу закрывает две длины).
+    """
+    priced = _priced_length_labels(cells, length_map)
+    return {lab: _stems_for_length(cells, lab, length_map) for lab in priced}
+
+
 @dataclass(frozen=True)
 class MixPoolRow:
     row_no: int
@@ -532,30 +544,56 @@ def apply_mix_plans_to_biflorica(
     if deal_date is None:
         _lg("Миксы: предупреждение — в отчёте нет даты сделки, колонка A у новых строк пустая")
 
-    # 1) списать qty с Mix-строк (накопить take по строке)
-    take_by_row: dict[int, int] = {}
+    # 1) списать qty с Mix-строк (накопить take по строке И длине — строка может
+    #    закрывать сразу две длины одной сделкой, «300|150»; трогать нужно только
+    #    ту длину, которую действительно взяли, не всю строку целиком).
+    take_by_row_length: dict[tuple[int, str], int] = {}
     for plan in plans:
         for t in plan.takes:
-            take_by_row[t.bif_row] = take_by_row.get(t.bif_row, 0) + t.take_qty
+            key = (t.bif_row, plan.length)
+            take_by_row_length[key] = take_by_row_length.get(key, 0) + t.take_qty
 
+    o_col = col_index["O"]
     rows_to_delete: list[int] = []
-    for row_no, take in take_by_row.items():
-        o_col = col_index["O"]
-        cur = _as_qty(ws.cell(row_no, o_col).value)
-        new_qty = cur - take
-        if new_qty <= 0:
+    for row_no in sorted({row for row, _ in take_by_row_length}):
+        cells = {letter: ws.cell(row_no, col_index[letter]).value for letter in length_map.values()}
+        cells["O"] = ws.cell(row_no, o_col).value
+        priced_order = _priced_length_labels(cells, length_map)
+        stems_by_length = _row_stems_by_length(cells, length_map)
+
+        new_stems: dict[str, int] = {}
+        for lab, orig in stems_by_length.items():
+            taken = take_by_row_length.get((row_no, lab), 0)
+            new_stems[lab] = max(orig - taken, 0)
+
+        remaining = [lab for lab in priced_order if new_stems.get(lab, 0) > 0]
+        if not remaining:
             rows_to_delete.append(row_no)
+            continue
+
+        exhausted = [lab for lab in priced_order if lab not in remaining]
+        for lab in exhausted:
+            # Эта длина в строке полностью выбрана — очищаем её цену, иначе
+            # останется цена без стеблей (или наоборот, стебли без цены).
+            ws.cell(row_no, col_index[length_map[lab]]).value = None
+
+        if len(remaining) == 1:
+            ws.cell(row_no, o_col).value = new_stems[remaining[0]]
         else:
-            ws.cell(row_no, o_col).value = new_qty
-            # пересчёт суммы сделки если есть цена в одной длине
-            price = None
-            for lab, letter in length_map.items():
-                p = _as_float(ws.cell(row_no, col_index[letter]).value)
-                if p is not None and p > 0:
-                    price = p
-                    break
-            if price is not None and "P" in col_index:
-                _set_money_cell(ws.cell(row_no, col_index["P"]), price * new_qty, money_fmt)
+            ws.cell(row_no, o_col).value = "|".join(str(new_stems[lab]) for lab in remaining)
+
+        if exhausted:
+            _lg(
+                f"Миксы: строка Mix #{row_no} — длина {', '.join(exhausted)} выбрана "
+                f"полностью, остаётся {', '.join(f'{lab}: {new_stems[lab]}' for lab in remaining)}"
+            )
+
+        if "P" in col_index:
+            total_sum = sum(
+                new_stems[lab] * (_as_float(cells.get(length_map[lab])) or 0.0)
+                for lab in remaining
+            )
+            _set_money_cell(ws.cell(row_no, col_index["P"]), total_sum, money_fmt)
 
     for row_no in sorted(rows_to_delete, reverse=True):
         ws.delete_rows(row_no, 1)
