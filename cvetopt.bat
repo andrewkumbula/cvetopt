@@ -99,6 +99,10 @@ set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="42" (
   echo [cvetopt] Update requested. git pull...
   if exist ".git\" (
+    REM uv sync ниже иногда локально правит uv.lock под конкретную машину - эти
+    REM правки не коммитим, поэтому перед pull их всегда отбрасываем, иначе
+    REM --ff-only откажется обновляться из-за "would be overwritten by merge".
+    git checkout -- uv.lock 2>nul
     git pull --ff-only
   ) else (
     echo [cvetopt] .git not found - skip git pull
