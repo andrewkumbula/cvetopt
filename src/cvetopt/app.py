@@ -446,7 +446,7 @@ async def run_gypsophila_split_route(request: Request):
 
 @app.post("/run/mix-separation")
 async def run_mix_separation_route(request: Request):
-    """Заполненный шаблон склада + Biflorica Mix 50/60/70 → отдельные позиции."""
+    """Заполненный шаблон склада + Biflorica Mix (любая длина из шаблона) → отдельные позиции."""
     busy = _reject_if_busy()
     if busy is not None:
         return busy

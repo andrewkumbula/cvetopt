@@ -32,7 +32,6 @@ LogFn = Callable[[str], None]
 
 _SPLIT_SUFFIXES = ("Гипсофила", "Роза", "Прочее", "Гортензия")
 BACKUP_MARKER = "до миксов"
-_BIFLORICA_LENGTHS = frozenset({"40", "50", "60", "70", "80", "90", "100", "100+"})
 _TYPE_COL = "C"
 _DATA_FIRST_FALLBACK = 7
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0"
@@ -70,20 +69,23 @@ def classify_flower_type(type_name: str) -> str:
 
 
 def normalize_biflorica_length_label(value: object) -> str | None:
+    """
+    Метка длины в шапке отчёта — целое положительное число, опционально с «+»
+    (как «100+»). Конкретный список длин не зашит: Biflorica может добавить
+    новую длину в любой момент — колонка распознаётся по форме значения, а не
+    по членству в заранее известном наборе.
+    """
     text = _norm(value).replace(",", ".")
     if not text:
         return None
-    if text in _BIFLORICA_LENGTHS:
-        return text
+    base = text[:-1] if text.endswith("+") else text
     try:
-        num = float(text)
-        if num == int(num):
-            label = str(int(num))
-            if label in _BIFLORICA_LENGTHS:
-                return label
+        num = float(base)
     except ValueError:
-        pass
-    return None
+        return None
+    if num <= 0 or num != int(num):
+        return None
+    return f"{int(num)}+" if text.endswith("+") else str(int(num))
 
 
 def _biflorica_header_marker_row(row: dict[str, str]) -> bool:

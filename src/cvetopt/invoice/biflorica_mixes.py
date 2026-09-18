@@ -1,6 +1,6 @@
 """
 Разбор миксов: заполненный «Шаблон ДД.ММ.ГГ» + Biflorica Mix →
-отдельные позиции с средневзвешенной ценой (длины 50, 60 и 70).
+отдельные позиции с средневзвешенной ценой (по любым длинам, что есть в шаблоне).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from cvetopt.invoice.biflorica_split import (
     biflorica_deals_header_or_raise,
     find_latest_biflorica_report,
     is_split_output_name,
+    normalize_biflorica_length_label,
 )
 from cvetopt.invoice.xlsx_read import (
     ensure_xlsx_workbook,
@@ -29,9 +30,6 @@ from cvetopt.invoice.xlsx_read import (
 
 LogFn = Callable[[str], None]
 
-# Длины, которые разбор миксов вообще трогает; остальные (40, 80, 90, 100…) — только
-# для распознавания шапки таблицы, их спрос и остаток не считаются.
-_TARGET_LENGTHS = ("50", "60", "70")
 _FILLED_TEMPLATE_STEM_RE = re.compile(
     r"^ша[бю]лон\s+.+$",  # шаблон / Шаблон / шаюлон (опечатки)
     re.IGNORECASE,
@@ -148,22 +146,26 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
             continue
         found: dict[str, str] = {}
         for col, val in cells.items():
-            label = _norm(val)
-            if label in _TARGET_LENGTHS or label in {"80", "40", "90", "100"}:
+            label = normalize_biflorica_length_label(_norm(val))
+            if label:
                 found[label] = col
-        if any(lab in found for lab in _TARGET_LENGTHS):
+        if found:
             header_row = row_no
             code_col = ecuador_col
             length_cols = found
             break
 
     if header_row is None:
-        raise RuntimeError(
-            f"В {path.name} нет таблицы Эквадор с длинами {'/'.join(_TARGET_LENGTHS)}"
-        )
+        raise RuntimeError(f"В {path.name} нет таблицы Эквадор с колонками длин")
+
+    # Порядок — как в шаблоне слева направо; totals — словарь в этом же порядке,
+    # дальше по нему же (plan_mix_allocation, log_mix_capacity) идёт обработка.
+    target_lengths = tuple(
+        sorted(length_cols, key=lambda lab: _col_to_index(length_cols[lab]))
+    )
 
     lines: list[TemplateLine] = []
-    totals: dict[str, int] = {lab: 0 for lab in _TARGET_LENGTHS}
+    totals: dict[str, int] = {lab: 0 for lab in target_lengths}
     for row_no in range(header_row + 1, max(rows) + 1):
         cells = rows.get(row_no, {})
         d = _norm(cells.get("D", ""))
@@ -173,7 +175,7 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
         elif not c and code_col == "C":
             c = _norm(cells.get("B", ""))
         if d.casefold() == "итог":
-            for lab in _TARGET_LENGTHS:
+            for lab in target_lengths:
                 col = length_cols.get(lab)
                 if col:
                     totals[lab] = _as_qty(cells.get(col, ""))
@@ -182,11 +184,7 @@ def parse_sklad_template(path: Path) -> TemplateDemand:
             continue
         if not c:
             continue
-        qtys = {
-            lab: _as_qty(cells.get(length_cols[lab], ""))
-            for lab in _TARGET_LENGTHS
-            if lab in length_cols
-        }
+        qtys = {lab: _as_qty(cells.get(length_cols[lab], "")) for lab in target_lengths}
         lines.append(
             TemplateLine(
                 excel_row=row_no,
@@ -320,7 +318,7 @@ def log_mix_capacity(
     except OSError:
         _lg(f"Миксы: Biflorica {biflorica_path.name}")
     _lg(f"Миксы: шаблон {demand.path.name}, нужно {demand.totals}")
-    for length in _TARGET_LENGTHS:
+    for length in demand.totals:
         need = demand.totals.get(length, 0)
         if need <= 0:
             continue
@@ -351,7 +349,7 @@ def plan_mix_allocation(
     header_row, length_map = _biflorica_header(rows, biflorica_path)
     plans: list[LengthPlan] = []
 
-    for length in _TARGET_LENGTHS:
+    for length in demand.totals:
         need = demand.totals.get(length, 0)
         filled = [ln for ln in demand.lines if ln.qtys.get(length, 0) > 0]
         if need <= 0 or not filled:
@@ -669,7 +667,7 @@ def run_mix_separation(
     plans = plan_mix_allocation(demand, biflorica_path, log=_lg)
     if not plans:
         raise RuntimeError(
-            f"Миксы: в шаблоне нет заполненных {'/'.join(_TARGET_LENGTHS)} для разбора"
+            f"Миксы: в шаблоне нет заполненных {'/'.join(demand.totals)} для разбора"
         )
     out = apply_mix_plans_to_biflorica(biflorica_path, plans, log=_lg)
     return demand, plans, out

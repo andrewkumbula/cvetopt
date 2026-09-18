@@ -22,7 +22,7 @@ async def run_mix_separation_job(
     biflorica_path: str | None = None,
 ) -> None:
     """
-    Заполненный «Шаблон ДД.ММ.ГГ» + Biflorica Mix (50/60/70) →
+    Заполненный «Шаблон ДД.ММ.ГГ» + Biflorica Mix (любая длина из шаблона) →
     отдельные позиции со средневзвешенной ценой без плантации.
     """
     yaml_cfg = env.yaml_config()

@@ -143,18 +143,25 @@ def mix_row(path: Path, plantation: str) -> dict[str, str] | None:
 
 @test("1.1 parse_sklad_template: базовый разбор кодов/количеств/итогов")
 def _(tmp: Path) -> None:
-    tpl = make_template(tmp / "tpl.xlsx", [
-        {"code": "Mix R", "title": "Роза Красная Микс", "qtys": {"50": 25, "60": 25}},
-        {"code": "Mondial", "title": "Роза Мондиаль", "qtys": {"60": 50}},
-    ])
+    # lengths=("50","60") явно — длины теперь определяются динамически по колонкам
+    # шапки, а не по зашитому списку, так что тест не зависит от того, что ещё
+    # make_template пишет по умолчанию.
+    tpl = make_template(
+        tmp / "tpl.xlsx",
+        [
+            {"code": "Mix R", "title": "Роза Красная Микс", "qtys": {"50": 25, "60": 25}},
+            {"code": "Mondial", "title": "Роза Мондиаль", "qtys": {"60": 50}},
+        ],
+        lengths=("50", "60"),
+    )
     demand = parse_sklad_template(tpl)
-    assert demand.totals == {"50": 25, "60": 75, "70": 0}, demand.totals
+    assert demand.totals == {"50": 25, "60": 75}, demand.totals
     assert len(demand.lines) == 2, demand.lines
     assert demand.lines[0].code == "Mix R"
-    assert demand.lines[0].qtys == {"50": 25, "60": 25, "70": 0}
-    # "50"/"70" присутствуют в шапке (общая для всех строк) — попадают в qtys нулём,
+    assert demand.lines[0].qtys == {"50": 25, "60": 25}
+    # "50" присутствует в шапке (общая для всех строк) — попадает в qtys нулём,
     # раз в этой конкретной строке значения нет.
-    assert demand.lines[1].qtys == {"50": 0, "60": 50, "70": 0}
+    assert demand.lines[1].qtys == {"50": 0, "60": 50}
 
 
 @test("1.2 parse_sklad_template: строки с нулевым спросом всё равно попадают в lines")
@@ -686,20 +693,25 @@ def _(tmp: Path) -> None:
     assert codes == ["Dup", "Dup"], codes
 
 
-@test("6.8 parse_sklad_template: таблица «Эквадор» есть, но без 50/60/70 (только 80) → ошибка")
+@test("6.8 parse_sklad_template: строка «Эквадор» есть, но рядом вообще нет чисел-длин → ошибка")
 def _(tmp: Path) -> None:
-    # Разбор миксов работает только с длинами 50/60/70 — таблица без них не должна
-    # молча давать пустой спрос, а должна явно сообщать, что подходящей таблицы нет.
-    tpl = make_template(
-        tmp / "tpl.xlsx",
-        [{"code": "A", "title": "A", "qtys": {"80": 10}}],
-        lengths=("80",),
-    )
+    # Длины теперь определяются по форме значения (любое число), а не по списку —
+    # значит единственный оставшийся способ провалить разбор: в строке с меткой
+    # «Эквадор» нет вообще ни одной похожей на длину колонки.
+    wb = Workbook()
+    ws = wb.active
+    ws["C8"] = "Эквадор"
+    ws["D8"] = "Название"
+    ws["C9"] = "A"
+    ws["D9"] = "A"
+    tpl = tmp / "tpl.xlsx"
+    wb.save(tpl)
+    wb.close()
     try:
         parse_sklad_template(tpl)
-        raise AssertionError("должно было упасть — нет колонок 50/60")
+        raise AssertionError("должно было упасть — нет ни одной колонки длины")
     except RuntimeError as e:
-        assert "50" in str(e) or "60" in str(e), e
+        assert "Эквадор" in str(e), e
 
 
 # === Этап 7: 70см — полноценная целевая длина (наравне с 50/60) ====================
@@ -809,6 +821,112 @@ def _(tmp: Path) -> None:
         assert mix_row(out, plant) is None, f"{plant} должен был полностью разобраться"
     new_codes = {c.get("D") for c in biflorica_rows(out).values() if c.get("D") in {"A", "B", "C"}}
     assert new_codes == {"A", "B", "C"}, new_codes
+
+
+# === Этап 8: произвольные длины, не только 50/60/70 =================================
+
+
+@test("8.1 parse_sklad_template: незнакомая длина (45) распознаётся сама, без списка")
+def _(tmp: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws["C8"] = "Эквадор"
+    ws["K8"] = "45"  # колонка вне TPL_LENGTH_COL — совсем новая длина
+    ws["C9"] = "A"
+    ws["D9"] = "A"
+    ws["K9"] = 30
+    ws["D10"] = "Итог"
+    ws["K10"] = 30
+    tpl = tmp / "tpl.xlsx"
+    wb.save(tpl)
+    wb.close()
+    demand = parse_sklad_template(tpl)
+    assert demand.totals == {"45": 30}, demand.totals
+    assert demand.lines[0].qtys == {"45": 30}
+
+
+@test("8.2 run_mix_separation: сквозной прогон на длине 90, которой нет ни в тестовых хелперах")
+def _(tmp: Path) -> None:
+    # 90 не входит ни в TPL_LENGTH_COL, ни в прежний список «известных» длин —
+    # собираем файлы руками, без make_template/make_biflorica, чтобы доказать,
+    # что 90 обрабатывается наравне с 50/60/70 без единого хардкода где-либо.
+    bif = Workbook()
+    bws = bif.active
+    bws[f"A{BIF_HEADER_ROW}"] = "ДАТА И ВРЕМЯ СДЕЛКИ"
+    bws[f"B{BIF_HEADER_ROW}"] = "ПЛАНТАЦИЯ"
+    bws[f"C{BIF_HEADER_ROW}"] = "ТИП"
+    bws[f"D{BIF_HEADER_ROW}"] = "СОРТ"
+    bws[f"M{BIF_HEADER_ROW}"] = "90"
+    bws[f"O{BIF_HEADER_ROW}"] = "ВСЕГО СТЕБЛЕЙ"
+    bws[f"P{BIF_HEADER_ROW}"] = "СУММА СДЕЛКИ"
+    rn = BIF_HEADER_ROW + 1
+    bws[f"B{rn}"] = "P1"
+    bws[f"C{rn}"] = "Роза"
+    bws[f"D{rn}"] = "Mix"
+    bws[f"M{rn}"] = 0.2
+    bws[f"O{rn}"] = 100
+    bif_path = tmp / "bif.xlsx"
+    bif.save(bif_path)
+    bif.close()
+
+    tpl_wb = Workbook()
+    tws = tpl_wb.active
+    tws["C8"] = "Эквадор"
+    tws["N8"] = "90"
+    tws["C9"] = "NewCode"
+    tws["D9"] = "NewCode"
+    tws["N9"] = 100
+    tws["D10"] = "Итог"
+    tws["N10"] = 100
+    tpl_path = tmp / "tpl.xlsx"
+    tpl_wb.save(tpl_path)
+    tpl_wb.close()
+
+    demand, plans, out = run_mix_separation(
+        template_path=tpl_path, biflorica_path=bif_path, log=lambda _m: None
+    )
+    assert demand.totals == {"90": 100}, demand.totals
+    assert [p.length for p in plans] == ["90"], plans
+    assert mix_row(out, "P1") is None, "остаток 90см полностью выбран — строка должна исчезнуть"
+    new_row = next(
+        (c for c in biflorica_rows(out).values() if c.get("D") == "NewCode"), None
+    )
+    assert new_row is not None, "новая позиция NewCode не найдена"
+    assert new_row["O"] == "100", new_row
+
+
+@test("8.3 normalize_biflorica_length_label: метка «100+» узнаётся для любого числа")
+def _(tmp: Path) -> None:
+    from cvetopt.invoice.biflorica_split import normalize_biflorica_length_label
+
+    assert normalize_biflorica_length_label("100+") == "100+"
+    assert normalize_biflorica_length_label("45+") == "45+"  # не только 100
+    assert normalize_biflorica_length_label("70") == "70"
+    assert normalize_biflorica_length_label("abc") is None
+    assert normalize_biflorica_length_label("") is None
+    assert normalize_biflorica_length_label("-5") is None  # отрицательное — не длина
+    assert normalize_biflorica_length_label("60.5") is None  # не целое — не длина
+
+
+@test("8.4 parse_sklad_template: две новые длины сразу (45 и 65) — обе своими колонками")
+def _(tmp: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws["C8"] = "Эквадор"
+    ws["K8"] = "45"
+    ws["L8"] = "65"
+    ws["C9"] = "A"
+    ws["D9"] = "A"
+    ws["K9"] = 10
+    ws["L9"] = 20
+    ws["D10"] = "Итог"
+    ws["K10"] = 10
+    ws["L10"] = 20
+    tpl = tmp / "tpl.xlsx"
+    wb.save(tpl)
+    wb.close()
+    demand = parse_sklad_template(tpl)
+    assert demand.totals == {"45": 10, "65": 20}, demand.totals
 
 
 # === Раннер ===========================================================================
