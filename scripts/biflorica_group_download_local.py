@@ -9,10 +9,10 @@
   3. Группировка заказов по дате вылета (порядок, состав)
   4. archive_biflorica_download_dir целиком, на реальных файлах на диске
 
-Взаимодействие с самим порталом Biflorica (клик по галочкам, скачивание) НЕ покрыто —
-это Playwright-код (_download_group_report, _walk_pages_setting_checkboxes,
-_set_order_checkbox в src/cvetopt/scrapers/biflorica.py), его можно проверить только
-на реальном сайте.
+Взаимодействие с самим порталом (клик по галочкам, скачивание — _download_group_report,
+_walk_pages_setting_checkboxes, _set_order_checkbox) здесь НЕ покрыто; см. отдельно
+biflorica_group_download_e2e_local.py — там та же логика прогоняется через настоящий
+Playwright против локального фейкового сервера с реальной вёрсткой портала.
 
 Запуск: .venv/bin/python scripts/biflorica_group_download_local.py
 """
@@ -356,9 +356,8 @@ def main() -> int:
     print()
     print(f"Итого: {passed}/{len(TESTS)} прошли")
     print(
-        "\nНЕ покрыто (нельзя проверить без живого портала): выбор нескольких галочек и "
-        "клик «Отчёт по сделкам» на реальной странице (_download_group_report, "
-        "_walk_pages_setting_checkboxes, _set_order_checkbox в scrapers/biflorica.py)."
+        "\nВзаимодействие с порталом (галочки, клик по «Отчёт по сделкам») — отдельно "
+        "в scripts/biflorica_group_download_e2e_local.py (Playwright + фейковый сервер)."
     )
     if failed:
         print("Упавшие:")
