@@ -468,6 +468,18 @@ def _unique_missing_descriptions(
     return sorted(out, key=str.casefold), skipped_non_product
 
 
+def _xls_dictionary_next_row(sheet: xlrd.sheet.Sheet) -> int:
+    """Строка после содержимого B/C, без хвоста из пустого текста и пробелов."""
+    for row in range(sheet.nrows - 1, -1, -1):
+        if any(
+            str(sheet.cell_value(row, col)).strip()
+            for col in (_DICT_COL_EN, _DICT_COL_RU)
+            if col < sheet.ncols
+        ):
+            return row + 2
+    return 2
+
+
 def _dictionary_next_row(path: Path) -> int:
     suffix = path.suffix.lower()
     if suffix == ".xlsx":
@@ -479,7 +491,7 @@ def _dictionary_next_row(path: Path) -> int:
                 max_row = max(max_row, int(m.group(2)))
         return max_row + 1
     book = xlrd.open_workbook(str(path))
-    return book.sheet_by_index(0).nrows + 1
+    return _xls_dictionary_next_row(book.sheet_by_index(0))
 
 
 def _append_rows_xlwings(path: Path, rows: list[tuple[str, str]]) -> None:
@@ -513,11 +525,11 @@ def _append_rows_xlwt(path: Path, rows: list[tuple[str, str]]) -> None:
     rb = xlrd.open_workbook(str(path))
     sheet_in = rb.sheet_by_index(0)
     wb_out = xlwt.Workbook()
-    ws_out = wb_out.add_sheet(rb.sheet_names()[0] or "Sheet1")
+    ws_out = wb_out.add_sheet(rb.sheet_names()[0] or "Sheet1", cell_overwrite_ok=True)
     for r in range(sheet_in.nrows):
         for c in range(sheet_in.ncols):
             ws_out.write(r, c, sheet_in.cell_value(r, c))
-    start = sheet_in.nrows
+    start = _xls_dictionary_next_row(sheet_in) - 1
     for offset, (en, ru) in enumerate(rows):
         row = start + offset
         ws_out.write(row, _DICT_COL_EN, en)
