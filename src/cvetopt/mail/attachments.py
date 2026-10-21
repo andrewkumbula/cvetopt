@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from email.header import decode_header
@@ -138,15 +139,58 @@ def _matches_filters(
     return True
 
 
-def _imap_search_criteria(cfg: MailConfig, since_imap: str) -> str:
+def _imap_search_criteria(
+    cfg: MailConfig, since_imap: str, *, with_from: bool = True
+) -> str:
     parts: list[str] = []
     if cfg.only_unread:
         parts.append("UNSEEN")
     parts.append(f"SINCE {since_imap}")
     from_emails = [s.strip() for s in cfg.from_contains if "@" in s]
-    if len(from_emails) == 1:
+    if with_from and len(from_emails) == 1:
         parts.append(f'FROM "{from_emails[0]}"')
     return "(" + " ".join(parts) + ")"
+
+
+# Паузы перед повторным подключением к IMAP (DNS, обрыв сети, таймаут).
+_IMAP_CONNECT_RETRY_DELAYS = (10, 30)
+_IMAP_TIMEOUT_SEC = 30
+
+
+def _imap_connect(
+    host: str, port: int, use_ssl: bool, log: Callable[[str], None]
+) -> imaplib.IMAP4:
+    attempts = len(_IMAP_CONNECT_RETRY_DELAYS) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            if use_ssl:
+                return imaplib.IMAP4_SSL(host, port, timeout=_IMAP_TIMEOUT_SEC)
+            return imaplib.IMAP4(host, port, timeout=_IMAP_TIMEOUT_SEC)
+        except OSError as e:
+            if attempt == attempts:
+                raise
+            delay = _IMAP_CONNECT_RETRY_DELAYS[attempt - 1]
+            log(
+                f"Почта: нет связи с {host} ({e}); повтор через {delay} с "
+                f"(попытка {attempt + 1} из {attempts})"
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def _filter_ids_by_from(
+    imap: imaplib.IMAP4, ids: list[bytes], cfg: MailConfig
+) -> list[bytes]:
+    """Отбор писем по отправителю на нашей стороне: качаем только заголовок From."""
+    matched: list[bytes] = []
+    for num in ids:
+        status, data = imap.fetch(num, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
+        if status != "OK" or not data or not isinstance(data[0], tuple):
+            continue
+        hdr = email.message_from_bytes(data[0][1])
+        if _from_matches(_decode_mime_header(hdr.get("From")), cfg):
+            matched.append(num)
+    return matched
 
 
 def _extension_ok(filename: str, cfg: MailConfig) -> bool:
@@ -429,10 +473,7 @@ def collect_mail_attachments(
     since = date.today() - timedelta(days=cfg.lookback_days)
     since_imap = since.strftime("%d-%b-%Y")
 
-    if cfg.use_ssl:
-        imap = imaplib.IMAP4_SSL(host, port)
-    else:
-        imap = imaplib.IMAP4(host, port)
+    imap = _imap_connect(host, port, cfg.use_ssl, _log)
 
     saved: list[Path] = []
     try:
@@ -468,6 +509,19 @@ def collect_mail_attachments(
 
         ids = (data[0] or b"").split()
         _log(f"Писем по IMAP {criteria} за {cfg.lookback_days} дн.: {len(ids)}")
+
+        # Поиск Яндекса по «дата + отправитель» иногда возвращает 0, хотя письма
+        # есть (октябрь 2026). Тогда ищем только по дате и отправителя проверяем сами.
+        fallback = _imap_search_criteria(cfg, since_imap, with_from=False)
+        if not ids and fallback != criteria:
+            status, data = imap.search(None, fallback)
+            if status == "OK":
+                all_ids = (data[0] or b"").split()
+                ids = _filter_ids_by_from(imap, all_ids, cfg)
+                _log(
+                    f"Почта: запасной поиск {fallback}: писем {len(all_ids)}, "
+                    f"от нужного отправителя {len(ids)}"
+                )
         known_filenames = _collect_known_filenames(
             registry_keys, registry_entries, layout.short_dir, layout.long_dir
         )

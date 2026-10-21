@@ -15,7 +15,7 @@ async def run_holland_full_cycle_job(
 ) -> None:
     """Почта → auto1 (Scan … for sklad) → перевод Description."""
     await job_step(job_id, "Шаг 1 из 3: забираю вложения из почты…")
-    await run_mail_attachments_job(
+    mail_files = await run_mail_attachments_job(
         job_id,
         env,
         lookback_days_override=mail_lookback_days_override,
@@ -25,6 +25,6 @@ async def run_holland_full_cycle_job(
     await run_auto1_pipeline_job(job_id, env)
 
     await job_step(job_id, "Шаг 3 из 3: перевод описаний…")
-    await run_holland_translate_job(job_id, env)
+    await run_holland_translate_job(job_id, env, new_mail_files=len(mail_files))
 
     await job_step(job_id, "Готово: Голландия (почта → обработка → перевод).")

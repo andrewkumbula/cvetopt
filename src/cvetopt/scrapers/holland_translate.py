@@ -18,7 +18,13 @@ from cvetopt.core.settings import EnvSettings
 from cvetopt.invoice.holland_translate import postprocess_holland_after_auto1
 
 
-async def run_holland_translate_job(job_id: str, env: EnvSettings) -> None:
+async def run_holland_translate_job(
+    job_id: str,
+    env: EnvSettings,
+    *,
+    new_mail_files: int | None = None,
+) -> None:
+    """new_mail_files — сколько файлов скачала почта на шаге 1 полного цикла."""
     yaml_cfg = env.yaml_config()
     cfg = yaml_cfg.holland_translate
 
@@ -63,6 +69,14 @@ async def run_holland_translate_job(job_id: str, env: EnvSettings) -> None:
         marker_assets_dir=marker_assets,
         log=_thread_log,
     )
+    if export_path is None and new_mail_files is not None:
+        await job_log(
+            job_id,
+            f"Голландия: для склада ничего не выгружено; новых файлов из почты: {new_mail_files}",
+        )
+        raise RuntimeError(
+            f"Excel не создал файл для склада Голландия_1_* в {sklad_dir}."
+        )
     if export_path is None:
         raise FileNotFoundError(
             f"Файл Голландия_1_*.xlsx не найден в {sklad_dir}. "

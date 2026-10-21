@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from loguru import logger
 
@@ -14,13 +15,14 @@ async def run_mail_attachments_job(
     job_id: str,
     env: EnvSettings,
     lookback_days_override: int | None = None,
-) -> None:
+) -> list[Path]:
+    """Возвращает новые скачанные файлы."""
     yaml_cfg = env.yaml_config()
     cfg = yaml_cfg.mail
 
     if not cfg.enabled:
         await job_log(job_id, "Почта отключена в config.yaml: mail.enabled=false")
-        return
+        return []
     if lookback_days_override is not None:
         cfg = cfg.model_copy(update={"lookback_days": lookback_days_override})
         await job_log(job_id, f"Переопределён период поиска писем: {cfg.lookback_days} дн.")
@@ -43,3 +45,4 @@ async def run_mail_attachments_job(
         logger.exception("mail attachments job failed")
         await job_log(job_id, f"Ошибка: {e}")
         raise
+    return paths
