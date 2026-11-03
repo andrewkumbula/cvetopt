@@ -289,7 +289,7 @@ def translate_holland_export(
             _lg(
                 f"Перевод в {export_path.name}: строк {total}, "
                 f"с переводом {translated}, без полного совпадения {missing} "
-                "(неизвестные слова оставлены как есть)."
+                "(такие строки оставлены оригиналом)."
             )
             return translated, missing, total
         except Exception as e:
@@ -299,7 +299,7 @@ def translate_holland_export(
     _lg(
         f"Перевод в {export_path.name}: строк {total}, "
         f"с переводом {translated}, без полного совпадения {missing} "
-        "(неизвестные слова оставлены как есть; XML-патч)."
+        "(такие строки оставлены оригиналом; XML-патч)."
     )
     return translated, missing, total
 

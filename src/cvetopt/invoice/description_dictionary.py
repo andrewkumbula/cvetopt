@@ -151,6 +151,8 @@ _HEADER_HINTS = frozenset(
 
 _CYRILLIC_LETTER_RE = re.compile(r"[а-яё]", re.IGNORECASE)
 _LATIN_LETTER_RE = re.compile(r"[a-z]", re.IGNORECASE)
+# Длина в названии Enigma: «60cm», «65 Cm», «60см». Не «*96» (штук в упаковке) и не «5+».
+_LENGTH_IN_NAME_RE = re.compile(r"(?i)\b\d+\s*(?:cm|см)(?!\w)")
 
 
 def _norm_key(text: str) -> str:
@@ -289,33 +291,20 @@ def load_description_dictionary(path: Path) -> dict[str, str]:
     raise ValueError(f"Неподдерживаемый формат словаря: {p.suffix}")
 
 
-def _build_folded_index(dictionary: dict[str, str]) -> dict[str, str]:
-    """casefold(ключ) → перевод; при коллизии побеждает более длинный исходный ключ."""
-    best: dict[str, tuple[int, str]] = {}
-    for src, dst in dictionary.items():
-        key = _norm_key(src)
-        val = _norm_key(dst)
-        if not key or not val:
-            continue
-        folded = key.casefold()
-        cur = best.get(folded)
-        if cur is None or len(key) > cur[0]:
-            best[folded] = (len(key), val)
-    return {k: v for k, (_, v) in best.items()}
-
-
 def translate_description(
     dictionary: dict[str, str],
     description: str,
 ) -> tuple[str, bool, bool]:
     """
-    Переводит Description по словарю.
+    Переводит Description по словарю — только точное совпадение всей строки
+    (или той же строки без длины «60cm»).
 
-    1) Сначала точное совпадение всей строки.
-    2) Иначе — по словам/фразам слева направо (жадно берём самый длинный
-       ключ словаря). Слова без перевода **оставляем как есть** — не вырезаем.
+    Без точного совпадения строка остаётся оригиналом **целиком**: частичный
+    перевод по словам давал гибриды вроде «Hyp Mag зеленый Power», которые
+    потом копировали в словарь.
 
-    Возвращает (текст_для_колонки, был_точный_хит, хоть_один_токен_из_словаря).
+    Возвращает (текст_для_колонки, был_точный_хит, хоть_один_токен_из_словаря);
+    третий флаг теперь совпадает со вторым.
     """
     key = _norm_key(description)
     if not key:
@@ -324,37 +313,18 @@ def translate_description(
     exact = lookup_translation(dictionary, key)
     if exact is not None:
         return exact, True, True
+    # Тот же цветок без длины («Oxy Co Tan Pure Blu 60cm» → «Oxy Co Tan Pure Blu»):
+    # переводим название, длина остаётся в колонке S1.
+    base = _without_length(key)
+    if base and base != key:
+        exact = lookup_translation(dictionary, base)
+        if exact is not None:
+            return exact, True, True
+    return key, False, False
 
-    tokens = key.split()
-    if not tokens:
-        return key, False, False
 
-    index = _build_folded_index(dictionary)
-    if not index:
-        return key, False, False
-
-    max_key_words = max((len(k.split()) for k in index), default=1)
-    out: list[str] = []
-    any_hit = False
-    i = 0
-    n = len(tokens)
-    while i < n:
-        matched = False
-        upper = min(max_key_words, n - i)
-        for length in range(upper, 0, -1):
-            phrase = " ".join(tokens[i : i + length])
-            hit = index.get(phrase.casefold())
-            if hit is not None:
-                out.append(hit)
-                i += length
-                any_hit = True
-                matched = True
-                break
-        if not matched:
-            out.append(tokens[i])
-            i += 1
-
-    return " ".join(out), False, any_hit
+def _without_length(text: str) -> str:
+    return _norm_key(_LENGTH_IN_NAME_RE.sub(" ", text))
 
 
 def lookup_translation(dictionary: dict[str, str], description: str) -> str | None:
@@ -461,7 +431,10 @@ def _unique_missing_descriptions(
             skipped_non_product += 1
             continue
         folded = key.casefold()
+        base = _without_length(key).casefold()
         if folded in seen or folded in translated_folded or folded in existing_keys:
+            continue
+        if base and base != folded and (base in translated_folded or base in existing_keys):
             continue
         seen.add(folded)
         out.append(key)
