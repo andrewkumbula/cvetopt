@@ -272,6 +272,21 @@ def _(tmp: Path) -> None:
     assert sorted(tmp.glob("* до миксов *.xlsx")) == backups, "появилась лишняя копия"
 
 
+@test("Миксы: строка с плантацией «-» в исходном отчёте не мешает первому запуску")
+def _(tmp: Path) -> None:
+    # В отчётах Biflorica бывает «-» вместо плантации (Freedom, Explorer…), а копии «до миксов» нет.
+    bif = make_biflorica(tmp / "BiFlorica-test.xlsx", [
+        {"plantation": "MIRO", "variety": "Mix", "prices": {"60": 0.3}, "stems": 600},
+        {"plantation": "-", "variety": "Freedom", "prices": {"60": 0.4}, "stems": 100},
+    ])
+    tpl = make_template(tmp / "Шаблон.xlsx", [
+        {"code": "Mix W", "qtys": {"60": 200}},
+        {"code": "Mix P", "qtys": {"60": 125}},
+    ], lengths=("60",))
+    _demand, plans, _out = run_mix_separation(template_path=tpl, biflorica_path=bif)
+    assert sum(t.take_qty for t in plans[0].takes) == 325, plans
+
+
 @test("Миксы: после возврата файла из копии «до миксов» снова запускаются")
 def _(tmp: Path) -> None:
     bif, tpl = _mix_case(tmp)

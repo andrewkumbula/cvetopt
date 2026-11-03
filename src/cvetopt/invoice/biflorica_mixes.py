@@ -437,7 +437,7 @@ def plan_mix_allocation(
 
 
 def rows_added_by_mixes(rows: dict[int, dict[str, str]], header_row: int) -> list[int]:
-    """Строки, которые дописали миксы: плантация «-». В отчёте Biflorica таких нет."""
+    """Строки с плантацией «-» — так миксы пишут новые позиции (бывает и в самом отчёте)."""
     return [
         row_no
         for row_no in sorted(rows)
@@ -457,15 +457,22 @@ def raise_if_mixes_already_applied(
     *,
     log: LogFn | None = None,
 ) -> None:
-    """Повторный запуск списал бы Mix второй раз — останавливаемся до любых правок."""
+    """
+    Повторный запуск списал бы Mix второй раз — останавливаемся до любых правок.
+
+    «Уже внесены» = рядом есть копия «до миксов» (её делают только миксы), файл от неё
+    отличается и в нём есть строки с плантацией «-». Одной «-» мало: в исходных отчётах
+    Biflorica такие строки тоже встречаются (Freedom, Explorer…). Файл, возвращённый из
+    копии, с ней совпадает — его можно разбирать снова, даже если копия осталась.
+    """
     added = rows_added_by_mixes(rows, header_row)
     if not added:
         return
-    _lg = log or _default_log
     backup = latest_backup_before_mixes(path)
-    restore = (
-        f"верните файл из «{backup.name}»" if backup is not None else "верните файл до миксов"
-    )
+    if backup is None or grid_by_row(read_excel_grid(backup)) == rows:
+        return
+    _lg = log or _default_log
+    restore = f"верните файл из «{backup.name}»"
     _lg(
         f"Миксы: ⚠ в {path.name} уже есть {len(added)} строк миксов "
         f"(плантация «-», строки {', '.join(map(str, added[:8]))}"
