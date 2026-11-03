@@ -436,6 +436,47 @@ def plan_mix_allocation(
     return plans
 
 
+def rows_added_by_mixes(rows: dict[int, dict[str, str]], header_row: int) -> list[int]:
+    """Строки, которые дописали миксы: плантация «-». В отчёте Biflorica таких нет."""
+    return [
+        row_no
+        for row_no in sorted(rows)
+        if row_no > header_row and _norm(rows[row_no].get("B", "")) == _PLANTATION_EMPTY
+    ]
+
+
+def latest_backup_before_mixes(path: Path) -> Path | None:
+    backups = sorted(path.parent.glob(f"{path.stem} до миксов *{path.suffix}"))
+    return backups[-1] if backups else None
+
+
+def raise_if_mixes_already_applied(
+    path: Path,
+    rows: dict[int, dict[str, str]],
+    header_row: int,
+    *,
+    log: LogFn | None = None,
+) -> None:
+    """Повторный запуск списал бы Mix второй раз — останавливаемся до любых правок."""
+    added = rows_added_by_mixes(rows, header_row)
+    if not added:
+        return
+    _lg = log or _default_log
+    backup = latest_backup_before_mixes(path)
+    restore = (
+        f"верните файл из «{backup.name}»" if backup is not None else "верните файл до миксов"
+    )
+    _lg(
+        f"Миксы: ⚠ в {path.name} уже есть {len(added)} строк миксов "
+        f"(плантация «-», строки {', '.join(map(str, added[:8]))}"
+        f"{' …' if len(added) > 8 else ''}) — файл не меняю"
+    )
+    raise RuntimeError(
+        f"Миксы: уже внесены в {path.name} — повторный запуск спишет Mix второй раз, "
+        f"файл не изменён. Чтобы пересчитать, {restore} или скачайте Biflorica заново."
+    )
+
+
 def backup_biflorica_before_mixes(path: Path) -> Path:
     """Копия «<имя> до миксов ГГГГ-ММ-ДД ЧЧММСС.xlsx» рядом с файлом."""
     stamp = datetime.now().strftime("%Y-%m-%d %H%M%S")
@@ -656,6 +697,7 @@ def run_mix_separation(
     )
     rows = grid_by_row(read_excel_grid(biflorica_path))
     header_row, length_map = _biflorica_header(rows, biflorica_path)
+    raise_if_mixes_already_applied(biflorica_path, rows, header_row, log=_lg)
     log_mix_capacity(
         demand,
         biflorica_path,
