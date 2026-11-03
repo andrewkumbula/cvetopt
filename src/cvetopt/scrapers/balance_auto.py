@@ -314,9 +314,12 @@ async def run_balance_auto_job(job_id: str, env: EnvSettings) -> None:
             "headless": pw_cfg.headless,
             "slow_mo": pw_cfg.slow_mo_ms or None,
         }
-        proxy_server = apply_playwright_proxy(launch_kwargs, env)
-        if proxy_server:
-            await lg(f"Playwright proxy: {proxy_server}")
+        if portal.use_proxy:
+            proxy_server = apply_playwright_proxy(launch_kwargs, env)
+            if proxy_server:
+                await lg(f"Playwright proxy: {proxy_server}")
+        else:
+            await lg("Biflorica: открываю напрямую, без прокси Happ")
         browser: Browser = await p.chromium.launch(**launch_kwargs)
         context_opts: dict = {
             "accept_downloads": True,

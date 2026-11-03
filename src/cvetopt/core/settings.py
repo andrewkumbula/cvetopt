@@ -77,6 +77,9 @@ class BifloricaPortalConfig(BaseModel):
     login_url: str = "https://ec.term.biflorica.ru/marketPlaceNew/balance"
     orders_url: str = "https://ec.term.biflorica.ru/marketPlaceNew/default/orders"
     tab: str = "all"
+    # Biflorica открывается без VPN: прокси Happ (PLAYWRIGHT_PROXY) нужен только del-mir.
+    # Иначе выключенный Happ ронял баланс и отчёты Biflorica без причины.
+    use_proxy: bool = False
     selectors: BifloricaSelectors = Field(default_factory=BifloricaSelectors)
     # Возрастное окно дат вылета для скачивания «Отчёт по сделкам»:
     # по умолчанию 3..7 дней (переопределяет глобальную selection.*).

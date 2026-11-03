@@ -235,33 +235,49 @@ def _proxy_server(ctx: Context) -> str:
     return proxy["server"]
 
 
-@check("Прокси Happ отвечает")
+@check("Прокси Happ отвечает (нужен для del-mir)")
 def _(ctx: Context) -> str:
     server = _proxy_server(ctx)
     parsed = urlparse(server)
     try:
         socket.create_connection((parsed.hostname, parsed.port or 80), timeout=5).close()
     except OSError:
-        raise RuntimeError(f"{server} не отвечает — включите Happ на сервере") from None
+        raise RuntimeError(
+            f"{server} не отвечает — включите Happ, иначе не заполнится «Транспорт трак» с del-mir"
+        ) from None
     return server
 
 
-@check("Сайт Biflorica открывается через прокси")
-def _(ctx: Context) -> str:
-    server = _proxy_server(ctx)
-    if not server.startswith("http"):
-        raise SkipCheck(f"проверка умеет только HTTP-прокси ({server})")
-    url = ctx.yaml.portals.biflorica.login_url
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": server, "https": server})
-    )
+def _open_site(url: str, proxy_server: str | None, owner: str) -> str:
+    handlers = []
+    if proxy_server is not None:
+        if not proxy_server.startswith("http"):
+            raise SkipCheck(f"проверка умеет только HTTP-прокси ({proxy_server})")
+        handlers.append(urllib.request.ProxyHandler({"http": proxy_server, "https": proxy_server}))
+    else:
+        handlers.append(urllib.request.ProxyHandler({}))  # напрямую, без системного прокси
+    opener = urllib.request.build_opener(*handlers)
+    route = f"через {proxy_server}" if proxy_server else "напрямую"
+    host = urlparse(url).hostname
     try:
         with opener.open(url, timeout=_NETWORK_TIMEOUT_SEC) as resp:
             code = resp.status
     except urllib.error.HTTPError as e:
         code = e.code
     except OSError as e:
-        raise RuntimeError(f"{urlparse(url).hostname} не открылся через {server}: {e}") from None
+        raise RuntimeError(f"{host} не открылся {route}: {e}") from None
     if code >= 500:
-        raise RuntimeError(f"сайт отвечает ошибкой {code} — проблема на стороне Biflorica")
-    return f"{urlparse(url).hostname}: ответ {code}"
+        raise RuntimeError(f"{host} отвечает ошибкой {code} — проблема на стороне {owner}")
+    return f"{host} {route}: ответ {code}"
+
+
+@check("Сайт Biflorica открывается")
+def _(ctx: Context) -> str:
+    portal = ctx.yaml.portals.biflorica
+    proxy = _proxy_server(ctx) if portal.use_proxy else None
+    return _open_site(portal.login_url, proxy, "Biflorica")
+
+
+@check("Сайт del-mir открывается через прокси")
+def _(ctx: Context) -> str:
+    return _open_site(ctx.yaml.delmir.login_url, _proxy_server(ctx), "del-mir")

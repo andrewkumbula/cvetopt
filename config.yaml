@@ -16,6 +16,8 @@ portals:
     login_url: "https://ec.term.biflorica.ru/marketPlaceNew/balance"
     orders_url: "https://ec.term.biflorica.ru/marketPlaceNew/default/orders"
     tab: "all"
+    # Biflorica открывается без VPN; прокси Happ нужен только del-mir.
+    use_proxy: false
     # Возрастное окно дат вылета для скачивания «Отчёт по сделкам».
     selection:
       min_age_days: 3
