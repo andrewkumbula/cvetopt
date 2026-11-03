@@ -3,23 +3,44 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>cvetopt — скачивание отчётов</title>
+  <title>ЦветОпт — обработка заказов</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  {# Шрифт не блокирует показ страницы: без интернета сразу будет Segoe UI. #}
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
   <style>
-    :root { font-family: system-ui, sans-serif; line-height: 1.45; }
-    body { max-width: 56rem; margin: 2rem auto; padding: 0 1rem; }
-    button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
-    button[disabled] { opacity: 0.5; cursor: not-allowed; }
-    .muted { color: #555; font-size: 0.9rem; }
-    .badge {
-      display: inline-block;
-      background: #eef;
-      border: 1px solid #ccd;
-      border-radius: 999px;
-      padding: 0.1rem 0.6rem;
-      font-size: 0.8rem;
-      color: #224;
+    :root {
+      --paper: #f7f8f6;
+      --surface: #ffffff;
+      --ink: #18211c;
+      --ink-soft: #55605a;
+      --line: #d9ded9;
+      --stem: #2c6e49;
+      --stem-dark: #1f5136;
+      --stem-tint: #e3eee6;
+      --note-ink: #7a5000;
+      --note-bg: #fff4d6;
+      --error: #b42318;
+      --error-bg: #fdecea;
+      font-family: "Onest", "Segoe UI", system-ui, sans-serif;
+      line-height: 1.5;
+      color: var(--ink);
     }
-    .badge.busy { background: #fee; border-color: #fbb; color: #911; }
+    body { max-width: 56rem; margin: 0 auto; padding: 0 1.25rem 3rem; background: var(--paper); }
+    button { font: inherit; padding: 0.45rem 0.9rem; font-size: 0.95rem; cursor: pointer;
+      border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; }
+    button:hover:not(:disabled) { border-color: var(--ink-soft); }
+    button[disabled] { opacity: 0.45; cursor: not-allowed; }
+    :focus-visible { outline: 3px solid #7fb394; outline-offset: 2px; }
+    input, textarea, select { font: inherit; }
+    .muted { color: var(--ink-soft); font-size: 0.9rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      font-size: 0.85rem; color: var(--stem-dark);
+    }
+    .badge::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--stem); }
+    .badge.busy { color: #8a3b00; }
+    .badge.busy::before { background: #d97706; }
     pre { background: #f4f4f4; padding: 1rem; overflow: auto; max-height: 24rem; }
     .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.5rem; flex-wrap: wrap; }
     .danger { background: #fff4f4; border-color: #fbb; }
@@ -76,26 +97,21 @@
     .job-form .muted-sep {
       color: #666;
     }
-    .tabs {
-      display: flex;
-      gap: 0.5rem;
-      margin-top: 1.25rem;
-      margin-bottom: 0.75rem;
+    .app-head {
+      display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;
+      padding: 1.1rem 0; border-bottom: 1px solid var(--line); margin-bottom: 2rem;
     }
+    .brand { font-weight: 700; font-size: 1.15rem; letter-spacing: -0.01em; }
+    .brand span { font-weight: 400; color: var(--ink-soft); font-size: 0.95rem; margin-left: 0.35rem; }
+    .tabs { display: flex; gap: 0.25rem; }
     .tab-btn {
-      border: 1px solid #ccd;
-      background: #f6f7ff;
-      color: #223;
-      border-radius: 8px;
-      padding: 0.35rem 0.8rem;
-      font-size: 0.92rem;
-      cursor: pointer;
+      border: 0; background: none; border-radius: 0; padding: 0.35rem 0.6rem;
+      color: var(--ink-soft); font-size: 0.95rem; border-bottom: 2px solid transparent;
     }
-    .tab-btn.active {
-      background: #e8ebff;
-      border-color: #aab4ff;
-      font-weight: 600;
-    }
+    .tab-btn:hover:not(:disabled) { color: var(--ink); }
+    .tab-btn.active { color: var(--ink); font-weight: 600; border-bottom-color: var(--stem); }
+    .head-state { margin-left: auto; display: flex; gap: 1rem; align-items: center; font-size: 0.9rem; }
+    .head-state a { color: var(--stem-dark); font-weight: 600; }
     .tab-panel.hidden {
       display: none;
     }
@@ -160,127 +176,249 @@
         justify-self: stretch;
       }
     }
+
+    /* ---------- Вкладка «Запуск»: процесс и шаги ---------- */
+    .btn { background: var(--surface); border: 1px solid var(--line); font-weight: 500; }
+    .step.current .btn, .btn.primary {
+      background: var(--stem); border-color: var(--stem); color: #fff; font-weight: 600;
+    }
+    .step.current .btn:hover:not(:disabled) { background: var(--stem-dark); border-color: var(--stem-dark); }
+    .link-btn {
+      border: 0; background: none; padding: 0.45rem 0.25rem; color: var(--ink-soft);
+      text-decoration: underline; text-underline-offset: 3px; font-size: 0.9rem;
+    }
+    .today { margin: 0; color: var(--stem-dark); font-weight: 600; }
+    .today::first-letter { text-transform: uppercase; }
+    .page-title { font-size: 2.4rem; line-height: 1.1; letter-spacing: -0.02em; margin: 0.2rem 0 1.5rem; font-weight: 700; }
+    .flow-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 2.25rem; }
+    .flow-tile {
+      text-align: left; padding: 0.95rem 1rem; border-radius: 12px; border: 1px solid var(--line);
+      background: var(--surface); display: flex; flex-direction: column; gap: 0.2rem;
+    }
+    .flow-tile b { font-size: 1.1rem; }
+    .flow-tile span { color: var(--ink-soft); font-size: 0.85rem; }
+    .flow-tile em { font-style: normal; font-size: 0.85rem; color: var(--stem-dark); margin-top: 0.35rem; }
+    .flow-tile em:empty { display: none; }
+    .flow-tile.on { border-color: var(--stem); box-shadow: inset 0 0 0 1px var(--stem); background: var(--stem-tint); }
+
+    /* Линия шагов — стебель: отрезок под шагом зеленеет, когда шаг сделан. */
+    .flow { list-style: none; padding: 0; margin: 0; counter-reset: step; }
+    .step { position: relative; padding: 0 0 1.75rem 3.25rem; counter-increment: step; }
+    .step::before {
+      content: counter(step); position: absolute; left: 0; top: 0;
+      width: 2.1rem; height: 2.1rem; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-weight: 700; background: var(--surface); border: 2px solid var(--line); color: var(--ink-soft);
+    }
+    .step::after {
+      content: ""; position: absolute; left: calc(1.05rem - 2px); top: 2.35rem; bottom: 0.25rem; width: 4px;
+      border-radius: 2px; background: linear-gradient(var(--stem), var(--stem)) no-repeat top / 100% 0%, var(--line);
+      transition: background-size 0.6s ease-out;
+    }
+    .step:last-child::after { display: none; }
+    .step.done::before { content: "✓"; background: var(--stem); border-color: var(--stem); color: #fff; }
+    .step.done::after { background-size: 100% 100%, auto; }
+    .step.current::before { border-color: var(--stem); color: var(--stem-dark); background: var(--stem-tint); }
+    .step.failed::before { content: "!"; border-color: var(--error); color: var(--error); background: var(--error-bg); }
+    .step.running::before { border-color: #d97706; color: #8a3b00; background: #fff4e5; }
+    .step h3 { margin: 0.25rem 0 0.2rem; font-size: 1.1rem; }
+    .step p { margin: 0 0 0.5rem; color: var(--ink-soft); max-width: 38rem; }
+    .step .need {
+      color: var(--note-ink); background: var(--note-bg); border-radius: 8px;
+      padding: 0.45rem 0.7rem; font-size: 0.9rem; display: none;
+    }
+    .step.current .need { display: block; }
+    .step-status:empty { display: none; }
+    .step-status { font-size: 0.9rem; color: var(--stem-dark) !important; }
+    .step.failed .step-status { color: var(--error) !important; }
+    .step-status a { color: inherit; font-weight: 600; }
+    .step-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .step-actions form { margin: 0; }
+    .step.done .step-actions .btn { font-size: 0.88rem; padding: 0.35rem 0.75rem; }
+    .step.done [data-mark],
+    .step:not(.current) .link-btn[data-mark] { display: none; }
+    .side-steps { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+    .side-steps summary { cursor: pointer; font-weight: 600; }
+    .side-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+    .side-grid form { margin: 0; }
+    .app-foot {
+      margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--line);
+      display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+    }
+    .app-foot #update-msg { flex-basis: 100%; margin: 0; }
+    @media (max-width: 640px) {
+      .flow-pick { grid-template-columns: 1fr; }
+      .page-title { font-size: 1.9rem; }
+      .head-state { margin-left: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .step::after { transition: none; }
+    }
   </style>
 </head>
 <body>
   {# Старые процессы uvicorn без context — не падаем #}
   {% set version = version|default({"commit": "", "date": "", "branch": ""}) %}
   {% set runtime_settings = runtime_settings|default({}) %}
-  <h1>cvetopt</h1>
-  <p class="muted">
-    Версия:
-    {% if version.commit %}
-      <code>{{ version.commit }}</code>{% if version.branch %} ({{ version.branch }}){% endif %}{% if version.date %} от {{ version.date }}{% endif %}
-    {% else %}
-      <em>git-репозиторий не инициализирован</em>
-    {% endif %}
-    &nbsp;|&nbsp; <span id="state" class="badge">проверяю состояние…</span>
-    &nbsp; <a id="resume-job" href="#" hidden style="font-weight:600;">↩ Вернуться к текущему прогону</a>
-  </p>
-
-  <div class="tabs" role="tablist" aria-label="Разделы">
-    <button id="tab-run" class="tab-btn active" type="button" data-tab-target="panel-run">Запуск</button>
-    <button id="tab-settings" class="tab-btn" type="button" data-tab-target="panel-settings">Настройки</button>
-    <button id="tab-help" class="tab-btn" type="button" data-tab-target="panel-help">Инструкция</button>
-  </div>
+  <header class="app-head">
+    <div class="brand">ЦветОпт <span>обработка заказов</span></div>
+    <nav class="tabs" role="tablist" aria-label="Разделы">
+      <button id="tab-run" class="tab-btn active" type="button" data-tab-target="panel-run">Запуск</button>
+      <button id="tab-settings" class="tab-btn" type="button" data-tab-target="panel-settings">Настройки</button>
+      <button id="tab-help" class="tab-btn" type="button" data-tab-target="panel-help">Инструкция</button>
+    </nav>
+    <div class="head-state">
+      <span id="state" class="badge">проверяю состояние…</span>
+      <a id="resume-job" href="#" hidden>Вернуться к текущему прогону</a>
+    </div>
+  </header>
 
   <section id="panel-run" class="tab-panel" role="tabpanel" aria-labelledby="tab-run">
-    <div class="row">
-      <form method="post" action="/run/biflorica" data-job-form id="biflorica-form" class="job-form">
-        <button type="submit" data-job-btn>Скачать отчёты (Biflorica + Эквадор)</button>
-      </form>
-      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        После скачивания <code>BiFlorica-*.xlsx</code> автоматически создаётся файл Эквадора (Windows + Excel).
-        Шаблон и папки — в <strong>Настройки</strong>.
-      </p>
+    {% set schedule = schedule|default({"biflorica": "", "weekly_chain": ""}) %}
+    <p class="today" id="today"></p>
+    <h1 class="page-title">Что делаем?</h1>
+
+    <div class="flow-pick" role="tablist" aria-label="Процесс">
+      <button type="button" class="flow-tile" data-flow="holland" role="tab">
+        <b>Голландия</b>
+        <span>Инвойсы Enigma{% if schedule.weekly_chain %}, сама запускается {{ schedule.weekly_chain }}{% endif %}</span>
+        <em class="flow-progress" data-progress="holland"></em>
+      </button>
+      <button type="button" class="flow-tile" data-flow="grid" role="tab">
+        <b>Сетка склада</b>
+        <span>Шаблон, миксы и гипсофила на сегодня</span>
+        <em class="flow-progress" data-progress="grid"></em>
+      </button>
+      <button type="button" class="flow-tile" data-flow="ecuador" role="tab">
+        <b>Эквадор</b>
+        <span>Отчёты Biflorica{% if schedule.biflorica %}, сам запускается {{ schedule.biflorica }}{% endif %}</span>
+        <em class="flow-progress" data-progress="ecuador"></em>
+      </button>
     </div>
 
-    <div class="row">
-      <form method="post" action="/run/balance-auto" data-job-form id="balance-auto-form" class="job-form">
-        <button type="submit" data-job-btn>Заполнить Auto_new.xls (перелёты Biflorica + Транспорт трак del-mir)</button>
-      </form>
-    </div>
+    {# Шаг: data-kind — кнопка, чей сегодняшний прогон отмечает шаг сделанным;
+       data-manual — шаг без кнопки, отмечается вручную до конца дня. #}
+    <ol class="flow" data-flow-body="holland" hidden>
+      <li class="step" data-step="holland-auto-new" data-kind="balance_auto+delmir">
+        <h3>Заполнить Auto_new.xls</h3>
+        <p>Перелёты из Biflorica и «Транспорт трак» с del-mir.</p>
+        <p class="need">Перед запуском: на сервере включён Happ. Он нужен для «Транспорт трак» с del-mir, Biflorica открывается и без него.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <form method="post" action="/run/balance-auto" data-job-form id="balance-auto-form">
+            <button type="submit" class="btn" data-job-btn>Заполнить Auto_new.xls</button>
+          </form>
+          <button type="button" class="link-btn" data-mark>Отметить сделанным</button>
+        </div>
+      </li>
+      <li class="step" data-step="holland-full" data-kind="holland_full_cycle">
+        <h3>Почта, Excel и перевод</h3>
+        <p>Забирает инвойсы Enigma из почты, прогоняет Auto1 до файла для склада и переводит Голландия_1 по словарю.</p>
+        <p class="need">Перед запуском: закройте Auto_new.xls, если он открыт.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <form method="post" action="/run/holland-full-cycle" data-job-form id="holland-full-cycle-form">
+            <button type="submit" class="btn" data-job-btn>Обработать инвойсы</button>
+          </form>
+          <button type="button" class="link-btn" data-mark>Отметить сделанным</button>
+        </div>
+      </li>
+      <li class="step" data-step="holland-dictionary" data-manual>
+        <h3>Перевести новые названия в словаре</h3>
+        <p>Новые названия программа дописала в конец Словарь.xls, колонка C у них пустая.</p>
+        <p class="need">В колонку B копируйте оригинал из Description, а не перевод. Сохраните и закройте словарь.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <button type="button" class="btn" data-mark>Словарь готов</button>
+        </div>
+      </li>
+      <li class="step" data-step="holland-translated" data-kind="holland_translated">
+        <h3>Перевести инвойсы</h3>
+        <p>Переводит названия в файлах папок 1 и 2, добавляет длину к розам и прогоняет Auto1 до Sort.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <form method="post" action="/run/holland-translated" data-job-form id="holland-translated-form">
+            <button type="submit" class="btn" data-job-btn>Перевести инвойсы</button>
+          </form>
+          <button type="button" class="link-btn" data-mark>Отметить сделанным</button>
+        </div>
+      </li>
+    </ol>
 
-    <div class="row">
-      <form method="post" action="/run/holland-full-cycle" data-job-form id="holland-full-cycle-form" class="job-form">
-        <button type="submit" data-job-btn>Голландия: почта → auto1 → перевод</button>
-      </form>
-      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        Windows + Excel. Шаг 1 — вложения Enigma в папки почты (в <strong>Настройки</strong> укажите
-        <code>C:\Invoice\1</code> и <code>C:\Invoice\1\2</code>).
-        Шаг 2 — Scan → Import → Calculate → Sort → для склада.
-        Шаг 3 — перевод Description по словарю, маркеры A–B.
-      </p>
-    </div>
+    <ol class="flow" data-flow-body="grid" hidden>
+      <li class="step" data-step="grid-template" data-kind="sklad_template_copy">
+        <h3>Создать шаблон на сегодня</h3>
+        <p>Копирует «шаблон» в «шаблон ДД.ММ.ГГГГ» в папке склада. Оригинал не меняется.</p>
+        <p class="need">Если шаблон на сегодня уже есть, программа его не перезапишет.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <form method="post" action="/run/sklad-template-copy" data-job-form id="sklad-template-copy-form">
+            <button type="submit" class="btn" data-job-btn>Создать шаблон</button>
+          </form>
+          <button type="button" class="link-btn" data-mark>Отметить сделанным</button>
+        </div>
+      </li>
+      <li class="step" data-step="grid-fill" data-manual>
+        <h3>Заполнить сетку</h3>
+        <p>При приёмке сотрудник вносит количества по длинам в шаблон на сегодня.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <button type="button" class="btn" data-mark>Сетка заполнена</button>
+        </div>
+      </li>
+      <li class="step" data-step="grid-mixes" data-kind="mix_separation">
+        <h3>Разобрать миксы</h3>
+        <p>Списывает розы Mix из Biflorica по шаблону и добавляет позиции со средней ценой.</p>
+        <p class="need">Один раз на файл. В папке Biflorica лежит один свежий отчёт BiFlorica.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <form method="post" action="/run/mix-separation" data-job-form id="mix-separation-form">
+            <button type="submit" class="btn" data-job-btn>Разобрать миксы</button>
+          </form>
+          <button type="button" class="link-btn" data-mark>Отметить сделанным</button>
+        </div>
+      </li>
+      <li class="step" data-step="grid-gypsophila" data-kind="gypsophila_split">
+        <h3>Отделить гипсофилу</h3>
+        <p>Рядом с отчётом Biflorica создаёт «… Роза.xlsx» и «… Гипсофила.xlsx». Полный отчёт остаётся.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <form method="post" action="/run/gypsophila-split" data-job-form id="gypsophila-split-form">
+            <button type="submit" class="btn" data-job-btn>Отделить гипсофилу</button>
+          </form>
+          <button type="button" class="link-btn" data-mark>Отметить сделанным</button>
+        </div>
+      </li>
+    </ol>
 
-    <div class="row">
-      <form method="post" action="/run/holland-translated" data-job-form id="holland-translated-form" class="job-form">
-        <button type="submit" data-job-btn>Переведено (папки 1+2 → ростовка → Auto1 до Sort)</button>
-      </form>
-      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        После того как в словаре заполнены русские переводы (колонка C): переводит Description
-        в файлах папок 1 и 2, всем розам добавляет ростовку (папка 1 — из T, папка 2 — из K без cm),
-        затем Auto1: Scan → Import → Calculate → Sort (без Group и без «для склада»).
-      </p>
-    </div>
+    <ol class="flow" data-flow-body="ecuador" hidden>
+      <li class="step" data-step="ecuador-biflorica" data-kind="biflorica">
+        <h3>Скачать отчёты Biflorica</h3>
+        <p>Скачивает «Отчёт по сделкам» и сразу создаёт по нему файл Эквадора.</p>
+        <p class="step-status"></p>
+        <div class="step-actions">
+          <form method="post" action="/run/biflorica" data-job-form id="biflorica-form">
+            <button type="submit" class="btn" data-job-btn>Скачать отчёты</button>
+          </form>
+          <button type="button" class="link-btn" data-mark>Отметить сделанным</button>
+        </div>
+      </li>
+    </ol>
 
-    <div class="row">
-      <form method="post" action="/run/sklad-template-copy" data-job-form id="sklad-template-copy-form" class="job-form">
-        <button type="submit" data-job-btn>Шаблон → копия на сегодняшнюю дату</button>
-      </form>
-      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        В папке «Инвойсы склад» (Настройки → папка Голландия_1_*) копирует файл
-        <code>шаблон</code> в <code>шаблон ДД.ММ.ГГГГ</code> с тем же расширением.
-        Оригинал не трогает. Дальше сетку заполняет сотрудник вручную.
-        Если файл на сегодня уже есть — ошибка (чтобы не затереть заполненную сетку).
-      </p>
-    </div>
-
-    <div class="row">
-      <form method="post" action="/run/mix-separation" data-job-form id="mix-separation-form" class="job-form">
-        <button type="submit" data-job-btn>Миксы: шаблон → Biflorica</button>
-      </form>
-      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        Берёт свежий заполненный <code>Шаблон ДД.ММ.ГГ</code> из папки «Инвойсы склад» и свежий
-        <code>BiFlorica-*.xlsx</code>. Для каждой длины, заполненной в шаблоне, списывает
-        самые дорогие строки сорта Mix, ставит средневзвешенную цену, очищает плантацию и
-        разбивает на позиции по англ. кодам и количествам из сетки шаблона.
-        Полный Biflorica меняется на месте — после этого можно жать «Гипсофила».
-      </p>
-    </div>
-
-    <div class="row">
-      <form method="post" action="/run/gypsophila-split" data-job-form id="gypsophila-split-form" class="job-form">
-        <button type="submit" data-job-btn>Гипсофила: разделить Biflorica (Роза / Гипсофила)</button>
-      </form>
-      <p class="muted" style="margin:0.35rem 0 0 0;font-size:0.9rem;">
-        Берёт свежий <code>BiFlorica-*.xlsx</code> из папки Biflorica (Настройки) и рядом создаёт
-        <code>… Гипсофила.xlsx</code> (только гипсофила) и <code>… Роза.xlsx</code>
-        (всё остальное: роза, альстро, гвоздика…).
-        Полный файл остаётся. Аналог ручного «открыть Гипсофила → Да».
-      </p>
-    </div>
-
-    <details class="advanced-jobs" style="margin-top:1.25rem;">
-      <summary class="muted" style="cursor:pointer;">Отдельные шаги (без цепочки)</summary>
-      <div class="row" style="margin-top:0.75rem;">
-        <form method="post" action="/run/mail-attachments" data-job-form id="mail-form" class="job-form">
-          <button type="submit" data-job-btn>Скачать вложения из почты</button>
+    <details class="side-steps">
+      <summary>Отдельные шаги</summary>
+      <p class="muted">Если цепочка остановилась на середине, здесь можно запустить один шаг.</p>
+      <div class="side-grid">
+        <form method="post" action="/run/mail-attachments" data-job-form id="mail-form">
+          <button type="submit" class="btn secondary" data-job-btn>Скачать вложения из почты</button>
         </form>
-      </div>
-      <div class="row">
-        <form method="post" action="/run/auto1-pipeline" data-job-form id="auto1-pipeline-form" class="job-form">
-          <button type="submit" data-job-btn>Auto1: Scan → … → для склада</button>
+        <form method="post" action="/run/auto1-pipeline" data-job-form id="auto1-pipeline-form">
+          <button type="submit" class="btn secondary" data-job-btn>Auto1 до файла для склада</button>
         </form>
-      </div>
-      <div class="row">
-        <form method="post" action="/run/holland-translate" data-job-form id="holland-translate-form" class="job-form">
-          <button type="submit" data-job-btn>Перевод (только)</button>
+        <form method="post" action="/run/holland-translate" data-job-form id="holland-translate-form">
+          <button type="submit" class="btn secondary" data-job-btn>Перевести Голландия_1</button>
         </form>
-      </div>
-      <div class="row">
-        <form method="post" action="/run/ecuador-create" data-job-form id="ecuador-create-form" class="job-form">
-          <button type="submit" data-job-btn>Эквадор: создать файл (без Biflorica)</button>
+        <form method="post" action="/run/ecuador-create" data-job-form id="ecuador-create-form">
+          <button type="submit" class="btn secondary" data-job-btn>Создать Эквадор без скачивания</button>
         </form>
       </div>
     </details>
@@ -385,7 +523,7 @@
         Дописывать в словарь новые названия без перевода (колонка B, C пустая).
         Служебные строки инвойса (fees, box, коды) не дописываются.
       </label>
-      <label for="holland_skip_descriptions" class="muted" style="display:block;margin:0.75rem 0 0.25rem 0;">
+      <label for="holland_skip_descriptions" class="muted" style="display:block;margin:0.75rem 0 0.25rem 0;grid-column:2 / -1;">
         Перевод: не трогать эти фразы (одна на строку):
       </label>
       <textarea
@@ -394,10 +532,10 @@
         rows="6"
         spellcheck="false"
         class="input-path"
-        style="width:100%;max-width:42rem;font-family:ui-monospace,monospace;font-size:0.85rem;resize:vertical;"
+        style="grid-column:2 / -1;box-sizing:border-box;width:100%;max-width:42rem;font-family:ui-monospace,monospace;font-size:0.85rem;resize:vertical;"
         placeholder="Carnations&#10;box *&#10;~administration"
       >{{ runtime_settings.holland_skip_descriptions|default('') }}</textarea>
-      <p class="muted" style="margin:0.25rem 0 0 0;font-size:0.85rem;max-width:42rem;">
+      <p class="muted" style="grid-column:2 / -1;margin:0.25rem 0 0 0;font-size:0.85rem;max-width:42rem;">
         Точное совпадение; <code>текст*</code> — начинается с; <code>~текст</code> — содержит;
         <code>#</code> — комментарий. Плюс встроенный фильтр (fees, box, Cargo…).
         Не переводит и не дописывает в словарь.
@@ -798,7 +936,7 @@
     <h3>«Проверить программу»</h3>
     <ul>
       <li>Проверяет сервер: папки из Настроек, словарь, <code>Auto_new.xls</code>, Excel, вход в почту,
-        прокси Happ и сайт Biflorica. Только чтение — письма не помечаются прочитанными, Excel не запускается.</li>
+        сайт Biflorica, прокси Happ и сайт del-mir через него. Только чтение — письма не помечаются прочитанными, Excel не запускается.</li>
       <li>Проверяет логику программы (перевод, словарь, «Переведено», почта, миксы) на файлах,
         которые сама создаёт в <code>data\selftest\run</code>. Рабочие файлы не трогает.</li>
       <li>Результат — список с зелёными ✓ и красными ✗; у красных написано, что сделать.
@@ -830,12 +968,13 @@
     </ul>
   </section>
 
-  <hr style="margin: 2.5rem 0;" />
-
-  <div class="row">
-    <button id="update-btn" class="danger" type="button">🔄 Обновить программу</button>
-  </div>
-  <p id="update-msg" class="muted"></p>
+  <footer class="app-foot">
+    <span class="muted">
+      {% if version.commit %}Версия {{ version.commit }}{% if version.date %} от {{ version.date }}{% endif %}{% else %}Версия неизвестна: нет git{% endif %}
+    </span>
+    <button id="update-btn" class="btn secondary" type="button">Обновить программу</button>
+    <p id="update-msg" class="muted"></p>
+  </footer>
 
   <script>
     const stateEl = document.getElementById("state");
@@ -1120,6 +1259,120 @@
         }
       });
     }
+
+    // --- Вкладка «Запуск»: процесс и шаги ---
+    // Шаг «сделан», если сегодня успешно прошёл прогон его кнопки (в том числе автозапуск)
+    // или его отметили вручную. Отметки живут в браузере до конца дня.
+    (() => {
+      const todayEl = document.getElementById("today");
+      if (!todayEl) return;
+      const now = new Date();
+      todayEl.textContent = now.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" });
+      const pad = n => String(n).padStart(2, "0");
+      const dayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const MARK_KEY = "cvetopt:done:" + dayKey;
+      const FLOW_KEY = "cvetopt:flow:" + dayKey;
+      const read = (key, fallback) => {
+        try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch (_) { return fallback; }
+      };
+      const write = (key, value) => {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
+      };
+      const marked = new Set(read(MARK_KEY, []));
+      let runs = {};
+
+      function jobLink(run, text) {
+        const a = document.createElement("a");
+        a.href = "/job/" + run.id;
+        a.textContent = text;
+        return a;
+      }
+
+      function stepState(li) {
+        const run = li.dataset.kind ? runs[li.dataset.kind] : null;
+        if (run && (run.status === "running" || run.status === "pending")) return ["running", run];
+        if (run && run.status === "completed") return ["done", run];
+        if (marked.has(li.dataset.step)) return ["marked", null];
+        if (run && run.status === "failed") return ["failed", run];
+        return ["todo", run];
+      }
+
+      function renderStatus(el, state, run, li) {
+        el.replaceChildren();
+        if (state === "running") {
+          el.append(`Идёт сейчас, запущено в ${run.time}. `, jobLink(run, "Открыть прогон"));
+        } else if (state === "done") {
+          el.append(`Сделано${run.auto ? " автоматически" : ""} в ${run.time}. `, jobLink(run, "Открыть прогон"));
+        } else if (state === "marked") {
+          const undo = document.createElement("button");
+          undo.type = "button";
+          undo.className = "link-btn";
+          undo.textContent = "Отменить";
+          undo.addEventListener("click", () => { marked.delete(li.dataset.step); write(MARK_KEY, [...marked]); render(); });
+          el.append("Отмечено как сделанное. ", undo);
+        } else if (state === "failed") {
+          el.append(`Ошибка в ${run.time}. ${run.error ? run.error + " " : ""}`, jobLink(run, "Открыть прогон"));
+        } else if (run && run.status === "cancelled") {
+          el.append(`Остановлен в ${run.time}. `, jobLink(run, "Открыть прогон"));
+        }
+      }
+
+      function render() {
+        document.querySelectorAll(".flow").forEach(ol => {
+          const steps = [...ol.children];
+          let done = 0;
+          let currentFound = false;
+          steps.forEach(li => {
+            const [state, run] = stepState(li);
+            const isDone = state === "done" || state === "marked";
+            li.classList.toggle("done", isDone);
+            li.classList.toggle("failed", state === "failed");
+            li.classList.toggle("running", state === "running");
+            const isCurrent = !isDone && !currentFound;
+            li.classList.toggle("current", isCurrent);
+            if (isCurrent) currentFound = true;
+            if (isDone) done++;
+            renderStatus(li.querySelector(".step-status"), state, run, li);
+          });
+          const progress = document.querySelector(`[data-progress="${ol.dataset.flowBody}"]`);
+          if (progress) {
+            progress.textContent = done === steps.length ? "Сегодня всё сделано"
+              : done ? `Сегодня сделано ${done} из ${steps.length}` : "";
+          }
+        });
+      }
+
+      function showFlow(name) {
+        document.querySelectorAll("[data-flow]").forEach(b => {
+          const on = b.dataset.flow === name;
+          b.classList.toggle("on", on);
+          b.setAttribute("aria-selected", on ? "true" : "false");
+        });
+        document.querySelectorAll("[data-flow-body]").forEach(ol => { ol.hidden = ol.dataset.flowBody !== name; });
+        write(FLOW_KEY, name);
+      }
+
+      document.querySelectorAll("[data-flow]").forEach(b => b.addEventListener("click", () => showFlow(b.dataset.flow)));
+      document.querySelectorAll("[data-mark]").forEach(b => b.addEventListener("click", () => {
+        marked.add(b.closest(".step").dataset.step);
+        write(MARK_KEY, [...marked]);
+        render();
+      }));
+
+      // По умолчанию: во вторник — Голландия, в четверг — Эквадор, иначе — сетка склада.
+      const byWeekday = { 2: "holland", 4: "ecuador" }[now.getDay()] || "grid";
+      showFlow(read(FLOW_KEY, byWeekday));
+      render();
+
+      async function pollToday() {
+        try {
+          const r = await fetch("/api/today", { cache: "no-store" });
+          if (r.ok) { runs = await r.json(); render(); }
+        } catch (_) {}
+        setTimeout(pollToday, 5000);
+      }
+      pollToday();
+    })();
 
     (async () => {
       const el = document.getElementById("selfcheck-last");

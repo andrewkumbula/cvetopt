@@ -3,12 +3,32 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Прогон {{ job_id }}</title>
+  <title>Прогон — ЦветОпт</title>
+  {# Шрифт не блокирует показ страницы: без интернета сразу будет Segoe UI. #}
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
   <style>
-    :root { font-family: system-ui, sans-serif; line-height: 1.45; }
-    body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
-    .status { font-weight: 600; }
-    pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-break: break-word; }
+    :root {
+      --paper: #f7f8f6; --surface: #ffffff; --ink: #18211c; --ink-soft: #55605a;
+      --line: #d9ded9; --stem: #2c6e49; --stem-dark: #1f5136;
+      font-family: "Onest", "Segoe UI", system-ui, sans-serif; line-height: 1.5; color: var(--ink);
+    }
+    body { max-width: 48rem; margin: 0 auto; padding: 0 1.25rem 3rem; background: var(--paper); }
+    :focus-visible { outline: 3px solid #7fb394; outline-offset: 2px; }
+    a { color: var(--stem-dark); }
+    .app-head {
+      display: flex; align-items: center; gap: 1.5rem; padding: 1.1rem 0;
+      border-bottom: 1px solid var(--line); margin-bottom: 1.5rem;
+    }
+    .brand { font-weight: 700; font-size: 1.15rem; color: var(--ink); text-decoration: none; }
+    .brand span { font-weight: 400; color: var(--ink-soft); font-size: 0.95rem; margin-left: 0.35rem; }
+    h1 { font-size: 2rem; letter-spacing: -0.02em; margin: 0 0 0.25rem; }
+    h2 { font-size: 1.15rem; margin: 1.75rem 0 0.5rem; }
+    .job-meta { color: var(--ink-soft); font-size: 0.9rem; margin: 0 0 1rem; }
+    .status { font-weight: 600; color: var(--ink); }
+    pre {
+      background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+      padding: 1rem; white-space: pre-wrap; word-break: break-word; font-size: 0.88rem;
+    }
     ul.files { font-size: 0.9rem; }
     a { color: #06c; }
     .run-banner {
@@ -51,13 +71,13 @@
     .checks-summary.has-fail { color: #b91c1c; }
     .checks h3 { font-size: 1rem; margin: 1rem 0 0.35rem 0; }
     .checks ul { list-style: none; padding: 0; margin: 0; }
-    .checks li { display: flex; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid #eee; }
+    .checks li { display: flex; gap: 0.6rem; padding: 0.35rem 0; border-bottom: 1px solid var(--line); }
     .check-icon {
       flex: none; width: 1.4rem; height: 1.4rem; border-radius: 4px;
       display: inline-flex; align-items: center; justify-content: center;
       color: #fff; font-weight: 700; font-size: 0.9rem;
     }
-    .check-ok .check-icon { background: #16a34a; }
+    .check-ok .check-icon { background: var(--stem); }
     .check-fail .check-icon { background: #dc2626; }
     .check-skip .check-icon { background: #9ca3af; }
     .check-fail .check-name { color: #991b1b; font-weight: 600; }
@@ -67,10 +87,12 @@
 </head>
 <body>
   <div id="run-notice" class="run-banner" role="status" hidden></div>
-  <p><a href="/">← На главную</a></p>
+  <header class="app-head">
+    <a class="brand" href="/">ЦветОпт <span>обработка заказов</span></a>
+    <a href="/">На главную</a>
+  </header>
   <h1>Прогон</h1>
-  <p>ID: <code id="jid">{{ job_id }}</code></p>
-  <p>Статус: <span class="status" id="st">…</span></p>
+  <p class="job-meta">Статус: <span class="status" id="st">…</span>. Номер <code id="jid">{{ job_id }}</code></p>
   <div class="actions">
     <button type="button" id="cancel-btn" hidden>Остановить прогон</button>
     <span id="cancel-msg" class="muted"></span>

@@ -4,6 +4,7 @@ import asyncio
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -100,8 +101,63 @@ async def index(request: Request) -> HTMLResponse:
             "version": _git_version(),
             "git_available": (PROJECT_ROOT / ".git").exists(),
             "runtime_settings": runtime_settings.model_dump(),
+            "schedule": _schedule_labels(env),
         },
     )
+
+
+_WEEKDAY_SHORT = {
+    "monday": "пн", "tuesday": "вт", "wednesday": "ср", "thursday": "чт",
+    "friday": "пт", "saturday": "сб", "sunday": "вс",
+}
+
+
+def _schedule_labels(env: EnvSettings) -> dict[str, str]:
+    """«вт 09:00» для автозапусков или пустая строка, если выключен."""
+    sched = env.yaml_config().schedule
+
+    def _label(task) -> str:
+        if not sched.enabled or not task.enabled:
+            return ""
+        return f"{_WEEKDAY_SHORT[task.weekday]} {task.hour:02d}:{task.minute:02d}"
+
+    return {"biflorica": _label(sched.biflorica), "weekly_chain": _label(sched.weekly_chain)}
+
+
+def _job_kind(portal_id: str) -> tuple[str, bool]:
+    """«auto:balance_auto+delmir:7d» → («balance_auto+delmir», True): кнопка и был ли автозапуск."""
+    auto = portal_id.startswith("auto:")
+    base = portal_id.removeprefix("auto:")
+    return base.split(":", 1)[0], auto
+
+
+@app.get("/api/today")
+async def api_today() -> JSONResponse:
+    """Последний сегодняшний прогон каждой кнопки — для шагов на вкладке «Запуск»."""
+    today = datetime.now().date()
+    latest: dict[str, dict] = {}
+    for job in sorted(job_manager.list_recent(500), key=lambda j: j.created_at):
+        started = job.created_at.replace(tzinfo=timezone.utc).astimezone()
+        if started.date() != today:
+            continue
+        kind, auto = _job_kind(job.portal_id)
+        latest[kind] = {
+            "id": job.id,
+            "status": job.status.value,
+            "auto": auto,
+            "time": started.strftime("%H:%M"),
+            "error": _short_error(job.error) if job.status == JobStatus.failed else "",
+        }
+    return JSONResponse(latest)
+
+
+def _short_error(error: str | None) -> str:
+    """Причина ошибки для шага на главной: без «RuntimeError: » и ссылки на журнал."""
+    text = (error or "").split("Подробности в журнале", 1)[0].strip()
+    head, sep, rest = text.partition(": ")
+    if sep and head.isidentifier() and head.endswith(("Error", "Exception")):
+        text = rest
+    return text
 
 
 @app.get("/api/version")
