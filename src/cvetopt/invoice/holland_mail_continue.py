@@ -247,8 +247,19 @@ def _apply_xls_updates(path: Path, desc_col: int, updates: dict[int, str]) -> No
     except Exception:
         pass
     for row, value in updates.items():
-        ws.write(row, desc_col, value)
+        _write_keeping_style(ws, row, desc_col, value)
     wb.save(str(path))
+
+
+def _write_keeping_style(ws: object, row: int, col: int, value: str) -> None:
+    """
+    ws.write без стиля сбрасывает ячейке оформление (выравнивание, цвет шрифта, заливку).
+    xlutils.copy уже перенёс исходный стиль ячейки — возвращаем его индекс после записи.
+    """
+    old_cell = ws._Worksheet__rows.get(row)._Row__cells.get(col) if row in ws._Worksheet__rows else None
+    ws.write(row, col, value)
+    if old_cell is not None:
+        ws._Worksheet__rows[row]._Row__cells[col].xf_idx = old_cell.xf_idx
 
 
 def _plan_updates_xlsx(

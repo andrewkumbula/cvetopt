@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import xlrd
-import xlwt
 
 from cvetopt.invoice.xlsx_read import _COL_RE, read_xlsx_grid
 
@@ -495,13 +494,16 @@ def _append_rows_xlwings(path: Path, rows: list[tuple[str, str]]) -> None:
 
 
 def _append_rows_xlwt(path: Path, rows: list[tuple[str, str]]) -> None:
-    rb = xlrd.open_workbook(str(path))
+    """Без Excel: копия книги с оформлением (цвета, шрифты, ширина колонок) + новые строки."""
+    from xlutils.copy import copy as xl_copy
+
+    from cvetopt.mail.short_postprocess import _copy_workbook_palette, _open_xls_workbook
+
+    rb = _open_xls_workbook(path.read_bytes())
     sheet_in = rb.sheet_by_index(0)
-    wb_out = xlwt.Workbook()
-    ws_out = wb_out.add_sheet(rb.sheet_names()[0] or "Sheet1", cell_overwrite_ok=True)
-    for r in range(sheet_in.nrows):
-        for c in range(sheet_in.ncols):
-            ws_out.write(r, c, sheet_in.cell_value(r, c))
+    wb_out = xl_copy(rb)
+    _copy_workbook_palette(rb, wb_out)
+    ws_out = wb_out.get_sheet(0)
     start = _xls_dictionary_next_row(sheet_in) - 1
     for offset, (en, ru) in enumerate(rows):
         row = start + offset
