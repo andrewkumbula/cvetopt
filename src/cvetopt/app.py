@@ -4,7 +4,7 @@ import asyncio
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from cvetopt.core import day_log
 from cvetopt.core.job_chains import run_balance_auto_and_delmir
 from cvetopt.core.job_manager import job_manager
 from cvetopt.core.job_messages import log_file_hint
@@ -55,6 +56,9 @@ _TEMPLATES = Jinja2Templates(
 
 app = FastAPI(title="cvetopt", version="0.1.0")
 configure_logging(EnvSettings())
+job_manager.add_finish_listener(
+    lambda job: day_log.record_finished_run(EnvSettings().project_root, job)
+)
 
 
 @app.on_event("startup")
@@ -124,40 +128,36 @@ def _schedule_labels(env: EnvSettings) -> dict[str, str]:
     return {"biflorica": _label(sched.biflorica), "weekly_chain": _label(sched.weekly_chain)}
 
 
-def _job_kind(portal_id: str) -> tuple[str, bool]:
-    """«auto:balance_auto+delmir:7d» → («balance_auto+delmir», True): кнопка и был ли автозапуск."""
-    auto = portal_id.startswith("auto:")
-    base = portal_id.removeprefix("auto:")
-    return base.split(":", 1)[0], auto
-
-
 @app.get("/api/today")
 async def api_today() -> JSONResponse:
-    """Последний сегодняшний прогон каждой кнопки — для шагов на вкладке «Запуск»."""
+    """Сегодняшние прогоны по кнопкам и отметки шагов — для вкладки «Запуск».
+
+    Завершённые прогоны берутся из журнала дня (переживает перезапуск), идущие — из памяти.
+    """
+    root = EnvSettings().project_root
     today = datetime.now().date()
-    latest: dict[str, dict] = {}
-    for job in sorted(job_manager.list_recent(500), key=lambda j: j.created_at):
-        started = job.created_at.replace(tzinfo=timezone.utc).astimezone()
-        if started.date() != today:
-            continue
-        kind, auto = _job_kind(job.portal_id)
-        latest[kind] = {
-            "id": job.id,
-            "status": job.status.value,
-            "auto": auto,
-            "time": started.strftime("%H:%M"),
-            "error": _short_error(job.error) if job.status == JobStatus.failed else "",
-        }
-    return JSONResponse(latest)
+    by_id = {r["id"]: r for r in day_log.load_runs(root, today)}
+    for job in job_manager.list_recent(500):
+        entry = day_log.run_entry(job)
+        if entry["started"].startswith(today.isoformat()):
+            by_id[job.id] = entry
+    runs: dict[str, list[dict]] = {}
+    for entry in sorted(by_id.values(), key=lambda r: r["started"]):
+        # Страница прогона живёт в памяти: после перезапуска ссылку не показываем.
+        entry["has_page"] = job_manager.get(entry["id"]) is not None
+        runs.setdefault(entry["kind"], []).append(entry)
+    return JSONResponse({"runs": runs, "marks": day_log.load_marks(root, today)})
 
 
-def _short_error(error: str | None) -> str:
-    """Причина ошибки для шага на главной: без «RuntimeError: » и ссылки на журнал."""
-    text = (error or "").split("Подробности в журнале", 1)[0].strip()
-    head, sep, rest = text.partition(": ")
-    if sep and head.isidentifier() and head.endswith(("Error", "Exception")):
-        text = rest
-    return text
+@app.post("/api/steps/{step_id}")
+async def api_step_mark(step_id: str, request: Request) -> JSONResponse:
+    """Отметка шага: {"state": "done"} — сделан вручную, "undone" — снять, null — убрать отметку."""
+    body = await request.json()
+    try:
+        marks = day_log.set_mark(EnvSettings().project_root, step_id, body.get("state"))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"marks": marks})
 
 
 @app.get("/api/version")

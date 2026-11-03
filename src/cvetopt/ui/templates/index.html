@@ -1262,7 +1262,9 @@
 
     // --- Вкладка «Запуск»: процесс и шаги ---
     // Шаг «сделан», если сегодня успешно прошёл прогон его кнопки (в том числе автозапуск)
-    // или его отметили вручную. Отметки живут в браузере до конца дня.
+    // или его отметили вручную. Прогоны и отметки хранит сервер (data/state), поэтому
+    // их видят все и они переживают перезапуск. «Снять отметку» в момент T: прогоны,
+    // начатые до T, шаг больше не закрывают — нужен новый запуск.
     (() => {
       const todayEl = document.getElementById("today");
       if (!todayEl) return;
@@ -1270,7 +1272,6 @@
       todayEl.textContent = now.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" });
       const pad = n => String(n).padStart(2, "0");
       const dayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-      const MARK_KEY = "cvetopt:done:" + dayKey;
       const FLOW_KEY = "cvetopt:flow:" + dayKey;
       const read = (key, fallback) => {
         try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch (_) { return fallback; }
@@ -1278,42 +1279,70 @@
       const write = (key, value) => {
         try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
       };
-      const marked = new Set(read(MARK_KEY, []));
       let runs = {};
+      let marks = {};
+      const hhmm = iso => iso.slice(11, 16);
 
-      function jobLink(run, text) {
+      async function setMark(step, state) {
+        try {
+          const r = await fetch("/api/steps/" + encodeURIComponent(step), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ state }),
+          });
+          if (r.ok) marks = (await r.json()).marks;
+        } catch (_) {}
+        render();
+      }
+
+      function linkBtn(text, onClick) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "link-btn";
+        b.textContent = text;
+        b.addEventListener("click", onClick);
+        return b;
+      }
+
+      function runRef(run) {
+        if (!run.has_page) return [];
         const a = document.createElement("a");
         a.href = "/job/" + run.id;
-        a.textContent = text;
-        return a;
+        a.textContent = "Открыть прогон";
+        return [a, " "];
       }
 
       function stepState(li) {
-        const run = li.dataset.kind ? runs[li.dataset.kind] : null;
-        if (run && (run.status === "running" || run.status === "pending")) return ["running", run];
-        if (run && run.status === "completed") return ["done", run];
-        if (marked.has(li.dataset.step)) return ["marked", null];
-        if (run && run.status === "failed") return ["failed", run];
-        return ["todo", run];
+        const mark = marks[li.dataset.step];
+        if (mark && mark.state === "done") return { state: "marked", mark };
+        const undoneAt = mark && mark.state === "undone" ? mark.at : "";
+        const all = (li.dataset.kind && runs[li.dataset.kind]) || [];
+        const run = all.filter(r => r.started > undoneAt).pop();
+        if (!run) return { state: "todo", mark };
+        if (run.status === "running" || run.status === "pending") return { state: "running", run };
+        if (run.status === "completed") return { state: "done", run };
+        if (run.status === "failed") return { state: "failed", run };
+        return { state: "cancelled", run };
       }
 
-      function renderStatus(el, state, run, li) {
+      function renderStatus(el, info, li) {
+        const step = li.dataset.step;
+        const { state, run, mark } = info;
         el.replaceChildren();
         if (state === "running") {
-          el.append(`Идёт сейчас, запущено в ${run.time}. `, jobLink(run, "Открыть прогон"));
+          el.append(`Идёт сейчас, запущено в ${hhmm(run.started)}. `, ...runRef(run));
         } else if (state === "done") {
-          el.append(`Сделано${run.auto ? " автоматически" : ""} в ${run.time}. `, jobLink(run, "Открыть прогон"));
+          el.append(`Сделано${run.auto ? " автоматически" : ""} в ${hhmm(run.started)}. `, ...runRef(run),
+            linkBtn("Снять отметку", () => setMark(step, "undone")));
         } else if (state === "marked") {
-          const undo = document.createElement("button");
-          undo.type = "button";
-          undo.className = "link-btn";
-          undo.textContent = "Отменить";
-          undo.addEventListener("click", () => { marked.delete(li.dataset.step); write(MARK_KEY, [...marked]); render(); });
-          el.append("Отмечено как сделанное. ", undo);
+          el.append(`Отмечено как сделанное в ${hhmm(mark.at)}. `, linkBtn("Отменить", () => setMark(step, null)));
         } else if (state === "failed") {
-          el.append(`Ошибка в ${run.time}. ${run.error ? run.error + " " : ""}`, jobLink(run, "Открыть прогон"));
-        } else if (run && run.status === "cancelled") {
-          el.append(`Остановлен в ${run.time}. `, jobLink(run, "Открыть прогон"));
+          el.append(`Ошибка в ${hhmm(run.started)}. ${run.error ? run.error + " " : ""}`, ...runRef(run));
+        } else if (state === "cancelled") {
+          el.append(`Остановлен в ${hhmm(run.started)}. `, ...runRef(run));
+        } else if (mark && mark.state === "undone") {
+          el.append(`Отметка снята в ${hhmm(mark.at)}, шаг нужно запустить заново. `,
+            linkBtn("Вернуть отметку", () => setMark(step, null)));
         }
       }
 
@@ -1323,16 +1352,16 @@
           let done = 0;
           let currentFound = false;
           steps.forEach(li => {
-            const [state, run] = stepState(li);
-            const isDone = state === "done" || state === "marked";
+            const info = stepState(li);
+            const isDone = info.state === "done" || info.state === "marked";
             li.classList.toggle("done", isDone);
-            li.classList.toggle("failed", state === "failed");
-            li.classList.toggle("running", state === "running");
+            li.classList.toggle("failed", info.state === "failed");
+            li.classList.toggle("running", info.state === "running");
             const isCurrent = !isDone && !currentFound;
             li.classList.toggle("current", isCurrent);
             if (isCurrent) currentFound = true;
             if (isDone) done++;
-            renderStatus(li.querySelector(".step-status"), state, run, li);
+            renderStatus(li.querySelector(".step-status"), info, li);
           });
           const progress = document.querySelector(`[data-progress="${ol.dataset.flowBody}"]`);
           if (progress) {
@@ -1354,9 +1383,7 @@
 
       document.querySelectorAll("[data-flow]").forEach(b => b.addEventListener("click", () => showFlow(b.dataset.flow)));
       document.querySelectorAll("[data-mark]").forEach(b => b.addEventListener("click", () => {
-        marked.add(b.closest(".step").dataset.step);
-        write(MARK_KEY, [...marked]);
-        render();
+        setMark(b.closest(".step").dataset.step, "done");
       }));
 
       // По умолчанию: во вторник — Голландия, в четверг — Эквадор, иначе — сетка склада.
@@ -1367,7 +1394,7 @@
       async function pollToday() {
         try {
           const r = await fetch("/api/today", { cache: "no-store" });
-          if (r.ok) { runs = await r.json(); render(); }
+          if (r.ok) { ({ runs, marks } = await r.json()); render(); }
         } catch (_) {}
         setTimeout(pollToday, 5000);
       }

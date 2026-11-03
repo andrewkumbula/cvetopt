@@ -4,7 +4,7 @@ import asyncio
 import subprocess
 import sys
 import uuid
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from datetime import datetime
 from typing import Any
 
@@ -42,6 +42,11 @@ class JobManager:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._cancel_requested: set[str] = set()
         self._lock = asyncio.Lock()
+        self._finish_listeners: list[Callable[[JobState], None]] = []
+
+    def add_finish_listener(self, listener: Callable[[JobState], None]) -> None:
+        """Вызывается, когда прогон завершился (готово / ошибка / остановлен)."""
+        self._finish_listeners.append(listener)
 
     def create_job(self, portal_id: str) -> JobState:
         jid = str(uuid.uuid4())
@@ -148,12 +153,19 @@ class JobManager:
                 return
             job.status = status
             job.error = error
-            if status in (
+            finished = status in (
                 JobStatus.completed,
                 JobStatus.failed,
                 JobStatus.cancelled,
-            ):
+            )
+            if finished:
                 job.finished_at = datetime.utcnow()
+        if finished:
+            for listener in self._finish_listeners:
+                try:
+                    listener(job)
+                except Exception:  # noqa: BLE001 — слушатель не должен ронять прогон
+                    logger.exception("finish listener failed for job {}", job_id)
 
     async def add_downloaded(self, job_id: str, path: str) -> None:
         async with self._lock:
