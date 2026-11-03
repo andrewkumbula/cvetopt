@@ -31,6 +31,12 @@
       background: #fffafa;
     }
     .testing-reset h3 { margin: 0 0 0.75rem 0; font-size: 1rem; }
+    /* Проверка ничего не меняет — не «опасный» розовый, как у сброса. */
+    .testing-reset.selfcheck { border-color: #bfdcc8; background: #f6fbf7; }
+    #selfcheck-form button { background: #15803d; color: #fff; border: 1px solid #166534; }
+    #selfcheck-form button:hover:not(:disabled) { background: #166534; }
+    #selfcheck-last.all-ok { color: #15803d; }
+    #selfcheck-last.has-fail { color: #b91c1c; }
     .testing-reset label { display: block; margin: 0.35rem 0; font-size: 0.95rem; }
     .testing-reset-actions { margin-top: 0.75rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
     #testing-reset-btn { background: #b45309; color: #fff; border: 1px solid #92400e; }
@@ -512,6 +518,19 @@
       <button id="save-settings-btn" type="button">Сохранить настройки</button>
       <span id="save-settings-msg" class="muted"></span>
     </div>
+    <div class="testing-reset selfcheck">
+      <h3>Проверка программы</h3>
+      <p class="muted">
+        Проверяет папки, словарь, почту, прокси и логику программы (перевод, словарь, миксы).
+        Рабочие файлы не меняются: всё тестовое создаётся в <code>data\selftest</code>.
+      </p>
+      <div class="testing-reset-actions">
+        <form method="post" action="/run/selfcheck" data-job-form id="selfcheck-form" class="job-form">
+          <button type="submit" data-job-btn>Проверить программу</button>
+        </form>
+        <span id="selfcheck-last" class="muted"></span>
+      </div>
+    </div>
     <div class="testing-reset">
       <h3>Сброс для тестирования</h3>
       <p class="muted">Пути в настройках выше не меняются — только реестры «уже скачано» и при желании файлы в папках.</p>
@@ -774,6 +793,17 @@
     <ul>
       <li>Записывает периоды и пути (Biflorica, почта, Auto_new, словарь, Эквадор и т.д.) в файл настроек.</li>
       <li>После перезапуска программы эти значения остаются.</li>
+    </ul>
+
+    <h3>«Проверить программу»</h3>
+    <ul>
+      <li>Проверяет сервер: папки из Настроек, словарь, <code>Auto_new.xls</code>, Excel, вход в почту,
+        прокси Happ и сайт Biflorica. Только чтение — письма не помечаются прочитанными, Excel не запускается.</li>
+      <li>Проверяет логику программы (перевод, словарь, «Переведено», почта, миксы) на файлах,
+        которые сама создаёт в <code>data\selftest\run</code>. Рабочие файлы не трогает.</li>
+      <li>Результат — список с зелёными ✓ и красными ✗; у красных написано, что сделать.
+        Серый «–» — проверку нельзя выполнить на этой машине (например, не задан прокси).</li>
+      <li>Удобно запускать после обновления программы и если что-то «вдруг перестало работать».</li>
     </ul>
 
     <h3>«Сбросить для повторного скачивания»</h3>
@@ -1090,6 +1120,27 @@
         }
       });
     }
+
+    (async () => {
+      const el = document.getElementById("selfcheck-last");
+      if (!el) return;
+      try {
+        const r = await fetch("/api/selfcheck/last");
+        const j = await r.json();
+        if (!j.finished_at) {
+          el.textContent = "Проверку ещё не запускали.";
+          return;
+        }
+        const when = new Date(j.finished_at).toLocaleString("ru-RU", {
+          day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+        });
+        el.textContent = `Последняя проверка ${when}: прошло ${j.ok} из ${j.total}` +
+          (j.failed ? `, не прошло ${j.failed}` : "");
+        el.className = j.failed ? "has-fail" : "all-ok";
+      } catch (e) {
+        el.textContent = "";
+      }
+    })();
   </script>
 </body>
 </html>

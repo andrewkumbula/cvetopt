@@ -31,4 +31,6 @@ class JobState(BaseModel):
     finished_at: datetime | None = None
     logs: list[str] = Field(default_factory=list)
     downloaded_paths: list[str] = Field(default_factory=list)
+    # Результаты «Проверить программу»: {group, name, status: ok|fail|skip, detail}.
+    checks: list[dict[str, str]] = Field(default_factory=list)
     error: str | None = None

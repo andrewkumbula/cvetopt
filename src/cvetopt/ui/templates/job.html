@@ -46,6 +46,23 @@
       line-height: 1.45;
     }
     .muted-note { font-size: 0.85rem; color: #666; }
+    .checks-summary { font-weight: 600; margin: 0 0 0.5rem 0; }
+    .checks-summary.all-ok { color: #15803d; }
+    .checks-summary.has-fail { color: #b91c1c; }
+    .checks h3 { font-size: 1rem; margin: 1rem 0 0.35rem 0; }
+    .checks ul { list-style: none; padding: 0; margin: 0; }
+    .checks li { display: flex; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid #eee; }
+    .check-icon {
+      flex: none; width: 1.4rem; height: 1.4rem; border-radius: 4px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: 0.9rem;
+    }
+    .check-ok .check-icon { background: #16a34a; }
+    .check-fail .check-icon { background: #dc2626; }
+    .check-skip .check-icon { background: #9ca3af; }
+    .check-fail .check-name { color: #991b1b; font-weight: 600; }
+    .check-detail { display: block; font-size: 0.85rem; color: #555; word-break: break-word; }
+    .check-fail .check-detail { color: #991b1b; }
   </style>
 </head>
 <body>
@@ -62,6 +79,11 @@
     <strong>Не получилось.</strong>
     <span id="err"></span>
   </div>
+  <section id="checks" class="checks" hidden>
+    <h2>Проверки</h2>
+    <p id="checks-summary" class="checks-summary"></p>
+    <div id="checks-groups"></div>
+  </section>
   <h2>Что происходит</h2>
   <pre id="log"></pre>
   <p class="muted-note">
@@ -108,6 +130,63 @@
       }
     });
 
+    const checkIcons = { ok: "✓", fail: "✗", skip: "–" };
+
+    function renderChecks(checks, status) {
+      const box = document.getElementById("checks");
+      box.hidden = checks.length === 0;
+      if (!checks.length) return;
+      const ok = checks.filter(c => c.status === "ok").length;
+      const failed = checks.filter(c => c.status === "fail").length;
+      const skipped = checks.length - ok - failed;
+      const sum = document.getElementById("checks-summary");
+      const running = status === "running" || status === "pending";
+      sum.textContent = (running ? "Идёт проверка… " : "") +
+        `прошло ${ok} из ${checks.length}` +
+        (failed ? `, не прошло ${failed}` : "") +
+        (skipped ? `, пропущено ${skipped}` : "");
+      sum.className = "checks-summary" + (failed ? " has-fail" : running ? "" : " all-ok");
+
+      const groups = document.getElementById("checks-groups");
+      groups.innerHTML = "";
+      const byGroup = new Map();
+      checks.forEach(c => {
+        if (!byGroup.has(c.group)) byGroup.set(c.group, []);
+        byGroup.get(c.group).push(c);
+      });
+      byGroup.forEach((items, group) => {
+        const h = document.createElement("h3");
+        const groupFailed = items.filter(c => c.status === "fail").length;
+        h.textContent = `${group} — ${items.filter(c => c.status === "ok").length} из ${items.length}` +
+          (groupFailed ? ` (не прошло ${groupFailed})` : "");
+        groups.appendChild(h);
+        const ul = document.createElement("ul");
+        // Непрошедшие — наверх группы, чтобы их не искать в длинном списке.
+        const order = { fail: 0, skip: 1, ok: 2 };
+        items.slice().sort((a, b) => order[a.status] - order[b.status]).forEach(c => {
+          const li = document.createElement("li");
+          li.className = "check-" + c.status;
+          const icon = document.createElement("span");
+          icon.className = "check-icon";
+          icon.textContent = checkIcons[c.status] || "?";
+          const body = document.createElement("span");
+          const name = document.createElement("span");
+          name.className = "check-name";
+          name.textContent = c.name;
+          body.appendChild(name);
+          if (c.detail) {
+            const d = document.createElement("span");
+            d.className = "check-detail";
+            d.textContent = c.detail;
+            body.appendChild(d);
+          }
+          li.append(icon, body);
+          ul.appendChild(li);
+        });
+        groups.appendChild(ul);
+      });
+    }
+
     async function tick() {
       const r = await fetch("/api/job/" + id);
       const j = await r.json();
@@ -120,6 +199,7 @@
       document.getElementById("err").textContent = failed ? (j.error || "") : "";
       document.getElementById("err-box").hidden = !failed || !j.error;
       document.getElementById("log").textContent = (j.logs || []).join("\n");
+      renderChecks(j.checks || [], j.status);
       const ul = document.getElementById("files");
       ul.innerHTML = "";
       (j.downloaded_paths || []).forEach(p => {

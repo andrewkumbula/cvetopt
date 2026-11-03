@@ -42,6 +42,8 @@ from cvetopt.scrapers.mix_separation import run_mix_separation_job
 from cvetopt.scrapers.biflorica import run_biflorica_job
 from cvetopt.scrapers.delmir import run_delmir_transport_job
 from cvetopt.scrapers.mail_attachments import run_mail_attachments_job
+from cvetopt.scrapers.selfcheck_job import run_selfcheck_job
+from cvetopt.selfcheck.runner import load_last_result
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESTART_EXIT_CODE = 42  # лаунчер cvetopt.bat подхватывает этот код и делает git pull + перезапуск.
@@ -456,6 +458,23 @@ async def run_mix_separation_route(request: Request):
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
+@app.post("/run/selfcheck")
+async def run_selfcheck_route(request: Request):
+    """Проверить программу: окружение (только чтение) + логика на тестовых файлах."""
+    busy = _reject_if_busy()
+    if busy is not None:
+        return busy
+    env = EnvSettings()
+    job = job_manager.create_job("selfcheck")
+    job_manager.schedule(job.id, run_selfcheck_job(job.id, env))
+    return RedirectResponse(url=f"/job/{job.id}", status_code=303)
+
+
+@app.get("/api/selfcheck/last")
+async def api_selfcheck_last() -> JSONResponse:
+    return JSONResponse(load_last_result(EnvSettings()) or {})
+
+
 @app.post("/run/biflorica")
 async def run_biflorica(
     request: Request,
@@ -603,6 +622,7 @@ async def job_api(job_id: str) -> JSONResponse:
             "status": job.status.value,
             "logs": job.logs,
             "downloaded_paths": job.downloaded_paths,
+            "checks": job.checks,
             "error": job.error,
             "cancellable": job.status in (JobStatus.pending, JobStatus.running),
         }

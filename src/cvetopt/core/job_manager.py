@@ -161,6 +161,12 @@ class JobManager:
             if job:
                 job.downloaded_paths.append(path)
 
+    async def add_check(self, job_id: str, check: dict[str, str]) -> None:
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.checks.append(check)
+
 
 job_manager = JobManager()
 

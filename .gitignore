@@ -15,6 +15,7 @@ data/sessions/
 data/downloads/
 data/state/
 data/logs/
+data/selftest/
 logs/
 *.xlsx
 *.xls.bak
