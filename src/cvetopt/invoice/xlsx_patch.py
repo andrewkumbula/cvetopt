@@ -74,11 +74,17 @@ def _write_bytes_with_retry(path: Path, data: bytes, *, attempts: int = 12) -> N
     raise PermissionError(hint) from last_err
 
 
-def _first_sheet_path(names: list[str]) -> str | None:
-    return next(
-        (n for n in names if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")),
-        None,
+def _data_sheet_path(zf: zipfile.ZipFile) -> str | None:
+    """
+    Лист, который читает read_xlsx_grid (лист с наибольшим числом значений), — патчим его же.
+    Первый лист по порядку в zip бывает пустым: у выгрузок Голландия_1 sheet2.xml идёт раньше sheet1.xml.
+    """
+    sheets = sorted(
+        n for n in zf.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")
     )
+    if not sheets:
+        return None
+    return max(sheets, key=lambda n: len(re.findall(rb"<(?:v|is)>", zf.read(n))))
 
 
 def _row_pattern(row_num: int) -> re.Pattern[bytes]:
@@ -222,7 +228,7 @@ def patch_xlsx_cell_values(path: Path, updates: dict[str, str | None]) -> int:
     path = path.resolve()
     changed = 0
     with zipfile.ZipFile(path, "r") as zf:
-        sheet_name = _first_sheet_path(zf.namelist())
+        sheet_name = _data_sheet_path(zf)
         if not sheet_name:
             raise RuntimeError(f"В {path.name} нет листа worksheet.")
         sheet_xml = zf.read(sheet_name)
