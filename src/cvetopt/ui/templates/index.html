@@ -1416,7 +1416,7 @@
           const result = { completed: "готово", failed: "с ошибкой", cancelled: "остановлен" }[prev.status] || "";
           const line = document.createElement("span");
           line.className = prev.status === "failed" ? "last-failed" : "";
-          line.textContent = `Последний раз: ${window.cvetoptShortDay(prev.started)} в ${hhmm(prev.started)}${result ? ", " + result : ""}.`;
+          line.textContent = `Последний запуск: ${window.cvetoptShortDay(prev.started)} в ${hhmm(prev.started)}${result ? ", " + result : ""}.`;
           el.append(line);
         }
       }
