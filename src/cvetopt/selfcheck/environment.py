@@ -13,7 +13,8 @@ import socket
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -21,6 +22,7 @@ from urllib.parse import urlparse
 
 import xlrd
 
+from cvetopt.core import vpn_tunnel
 from cvetopt.core.playwright_proxy import playwright_proxy_dict
 from cvetopt.core.runtime_settings import (
     RuntimeSettings,
@@ -231,12 +233,27 @@ def _(ctx: Context) -> str:
 def _proxy_server(ctx: Context) -> str:
     proxy = playwright_proxy_dict(ctx.env)
     if proxy is None:
-        raise SkipCheck("PLAYWRIGHT_PROXY не задан в .env")
+        raise SkipCheck("в .env нет ни VPN_SINGBOX, ни PLAYWRIGHT_PROXY")
     return proxy["server"]
 
 
-@check("Прокси Happ отвечает (нужен для del-mir)")
+@contextmanager
+def _browser_proxy(ctx: Context, needed: bool = True) -> Iterator[str | None]:
+    """Тот же прокси, что получит браузер скрапера; sing-box живёт только на время проверки."""
+    if not needed:
+        yield None
+    elif vpn_tunnel.configured(ctx.env):
+        with vpn_tunnel.session(ctx.env) as (proxy, _):
+            yield proxy["server"]
+    else:
+        yield _proxy_server(ctx)
+
+
+@check("VPN для браузера отвечает (нужен для del-mir)")
 def _(ctx: Context) -> str:
+    if vpn_tunnel.configured(ctx.env):
+        with vpn_tunnel.session(ctx.env) as (_, notes):
+            return "; ".join(note.removeprefix("VPN: ") for note in notes)
     server = _proxy_server(ctx)
     parsed = urlparse(server)
     try:
@@ -274,10 +291,11 @@ def _open_site(url: str, proxy_server: str | None, owner: str) -> str:
 @check("Сайт Biflorica открывается")
 def _(ctx: Context) -> str:
     portal = ctx.yaml.portals.biflorica
-    proxy = _proxy_server(ctx) if portal.use_proxy else None
-    return _open_site(portal.login_url, proxy, "Biflorica")
+    with _browser_proxy(ctx, portal.use_proxy) as proxy:
+        return _open_site(portal.login_url, proxy, "Biflorica")
 
 
 @check("Сайт del-mir открывается через прокси")
 def _(ctx: Context) -> str:
-    return _open_site(ctx.yaml.delmir.login_url, _proxy_server(ctx), "del-mir")
+    with _browser_proxy(ctx) as proxy:
+        return _open_site(ctx.yaml.delmir.login_url, proxy, "del-mir")

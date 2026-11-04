@@ -44,3 +44,6 @@ test/
 
 # Локальный список идей — не коммитить.
 ИДЕИ_ДЛЯ_РАЗВИТИЯ.md
+
+# sing-box и ключ VPN (config.json) — только на сервере, см. docs/vpn-singbox.md
+vpn/

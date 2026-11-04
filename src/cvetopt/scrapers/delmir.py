@@ -13,7 +13,7 @@ from playwright.async_api import Browser, Locator, Page, async_playwright
 
 from cvetopt.auto_new_xls import apply_transport_costs
 from cvetopt.core.job_manager import job_log, job_manager
-from cvetopt.core.playwright_proxy import apply_playwright_proxy
+from cvetopt.core.playwright_proxy import browser_proxy
 from cvetopt.core.settings import (
     AppYamlConfig,
     DelmirConfig,
@@ -723,7 +723,7 @@ async def run_delmir_transport_job(
     pw_cfg = merged_playwright(env, yaml_cfg)
     today = date.today()
 
-    async with async_playwright() as p:
+    async with browser_proxy(env, lg) as proxy, async_playwright() as p:
         launch_kwargs: dict = {
             "headless": pw_cfg.headless,
             "slow_mo": pw_cfg.slow_mo_ms or None,
@@ -733,9 +733,9 @@ async def run_delmir_transport_job(
                 "--disable-background-networking",
             ],
         }
-        proxy_server = apply_playwright_proxy(launch_kwargs, env)
-        if proxy_server:
-            await lg(f"Playwright proxy: {proxy_server}")
+        if proxy:
+            launch_kwargs["proxy"] = proxy
+            await lg(f"Playwright proxy: {proxy['server']}")
         else:
             await lg(
                 "Playwright proxy: не задан (PLAYWRIGHT_PROXY в .env). "

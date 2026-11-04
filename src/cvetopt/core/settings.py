@@ -364,6 +364,9 @@ class EnvSettings(BaseSettings):
     playwright_proxy: str = ""
     playwright_proxy_username: str = ""
     playwright_proxy_password: str = ""
+    # Папка с sing-box(.exe) и config.json: программа сама поднимает VPN на время
+    # задачи (docs/vpn-singbox.md). Если задана — PLAYWRIGHT_PROXY не используется.
+    vpn_singbox: str = ""
 
     @property
     def project_root(self) -> Path:

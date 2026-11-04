@@ -324,8 +324,9 @@ _ERROR_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         _rx(r"chrome-error://|err_(proxy|tunnel)"),
-        "Нет доступа к сайту из программы. Включите Happ (прокси) и укажите "
-        "PLAYWRIGHT_PROXY в файле .env, затем перезапустите программу.",
+        "Нет доступа к сайту из программы. Если VPN через Happ — включите его и укажите "
+        "PLAYWRIGHT_PROXY в файле .env; если через sing-box (VPN_SINGBOX) — нажмите "
+        "«Проверить программу» в Настройках.",
     ),
     (
         _rx(r"getaddrinfo|gaierror|errno 1100[14]"),

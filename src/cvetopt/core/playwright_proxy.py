@@ -1,15 +1,20 @@
 """Прокси для Playwright Chromium.
 
-Системный прокси Windows / TUN-режим Happ Playwright НЕ использует —
-нужен явный PLAYWRIGHT_PROXY в .env (обычно локальный HTTP-порт Happ).
+Два источника:
+  VPN_SINGBOX — программа сама поднимает sing-box на время задачи (vpn_tunnel);
+  PLAYWRIGHT_PROXY — уже работающий прокси, обычно локальный HTTP-порт Happ.
+Системный прокси Windows / TUN-режим Happ Playwright НЕ использует.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from urllib.parse import unquote, urlparse
 
+from cvetopt.core import vpn_tunnel
 from cvetopt.core.settings import EnvSettings
 
 
@@ -76,13 +81,27 @@ def _normalize_proxy(server: str, user: str, pwd: str) -> tuple[str, str, str]:
     return clean, user, pwd
 
 
-def apply_playwright_proxy(
-    launch_kwargs: dict[str, Any],
-    env: EnvSettings | None = None,
-) -> str | None:
-    """Добавляет proxy в launch_kwargs. Возвращает server для лога или None."""
-    proxy = playwright_proxy_dict(env)
-    if not proxy:
-        return None
-    launch_kwargs["proxy"] = proxy
-    return proxy["server"]
+@asynccontextmanager
+async def browser_proxy(
+    env: EnvSettings,
+    log: Callable[[str], Awaitable[None]],
+    *,
+    needed: bool = True,
+) -> AsyncIterator[dict[str, str] | None]:
+    """Прокси для chromium.launch(proxy=...) на время блока, или None.
+
+    С VPN_SINGBOX поднимает sing-box и гасит его на выходе из блока."""
+    if not needed:
+        yield None
+        return
+    if not vpn_tunnel.configured(env):
+        yield playwright_proxy_dict(env)
+        return
+    await log("VPN: запускаю sing-box…")
+    proxy, notes = await asyncio.to_thread(vpn_tunnel.acquire, env)
+    try:
+        for note in notes:
+            await log(note)
+        yield proxy
+    finally:
+        await asyncio.to_thread(vpn_tunnel.release, env)
