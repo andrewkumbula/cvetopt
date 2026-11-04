@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from loguru import logger
 
-from cvetopt.core import day_log, run_history
+from cvetopt.core import day_log, run_history, vpn_tunnel
 from cvetopt.core.job_chains import run_balance_auto_and_delmir
 from cvetopt.core.job_manager import job_manager
 from cvetopt.core.job_messages import log_file_hint
@@ -121,6 +121,7 @@ async def index(request: Request) -> HTMLResponse:
             "git_available": (PROJECT_ROOT / ".git").exists(),
             "runtime_settings": runtime_settings.model_dump(),
             "schedule": _schedule_labels(env),
+            "vpn_auto": vpn_tunnel.configured(env),
         },
     )
 

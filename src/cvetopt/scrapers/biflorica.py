@@ -498,7 +498,7 @@ async def run_biflorica_job(
             launch_kwargs["proxy"] = proxy
             await lg(f"Playwright proxy: {proxy['server']}")
         elif not portal.use_proxy:
-            await lg("Biflorica: открываю напрямую, без прокси Happ")
+            await lg("Biflorica: открываю напрямую, без VPN")
         browser: Browser = await p.chromium.launch(**launch_kwargs)
         context_opts: dict = {
             "accept_downloads": True,

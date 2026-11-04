@@ -357,7 +357,9 @@
       <li class="step" data-step="holland-auto-new" data-kind="balance_auto+delmir">
         <h3>Заполнить Auto_new.xls</h3>
         <p>Перелёты из Biflorica и «Транспорт трак» с del-mir.</p>
+        {% if not vpn_auto %}
         <p class="need">Перед запуском: на сервере включён Happ. Он нужен для «Транспорт трак» с del-mir, Biflorica открывается и без него.</p>
+        {% endif %}
         <p class="step-status"></p>
         <div class="step-actions">
           <form method="post" action="/run/balance-auto" data-job-form id="balance-auto-form">
@@ -1003,7 +1005,7 @@
     <h3>«Проверить программу»</h3>
     <ul>
       <li>Проверяет сервер: папки из Настроек, словарь, <code>Auto_new.xls</code>, Excel, вход в почту,
-        сайт Biflorica, прокси Happ и сайт del-mir через него. Только чтение — письма не помечаются прочитанными, Excel не запускается.</li>
+        сайт Biflorica, VPN для браузера и сайт del-mir через него. Только чтение — письма не помечаются прочитанными, Excel не запускается.</li>
       <li>Проверяет логику программы (перевод, словарь, «Переведено», почта, миксы) на файлах,
         которые сама создаёт в <code>data\selftest\run</code>. Рабочие файлы не трогает.</li>
       <li>Результат — список с зелёными ✓ и красными ✗; у красных написано, что сделать.
