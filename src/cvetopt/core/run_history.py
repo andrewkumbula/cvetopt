@@ -31,6 +31,7 @@ KIND_LABELS = {
     "holland_translate": "Перевести Голландия_1",
     "ecuador_create": "Создать Эквадор",
     "delmir_transport": "Транспорт трак с del-mir",
+    "delmir_check": "Проверить del-mir",
     "selfcheck": "Проверить программу",
 }
 
@@ -47,6 +48,7 @@ _KIND_MARKERS: list[tuple[str, str]] = [
     ("holland_full_cycle", "Шаг 1 из 3: забираю вложения"),
     ("balance_auto+delmir", "marketPlaceNew/balance"),
     ("balance_auto+delmir", "(баланс Biflorica)"),
+    ("delmir_check", "Проверка del-mir:"),
     ("delmir_transport", "Транспорт трак"),
     ("mix_separation", "Миксы:"),
     ("gypsophila_split", "Гипсофила:"),

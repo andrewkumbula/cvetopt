@@ -577,6 +577,22 @@ async def run_selfcheck_route(request: Request):
     return RedirectResponse(url=f"/job/{job.id}", status_code=303)
 
 
+@app.post("/run/delmir-check")
+async def run_delmir_check(request: Request):
+    """Проверить del-mir: VPN, вход и чтение данных как в боевом прогоне, без записи в Auto_new.xls."""
+    busy = _reject_if_busy()
+    if busy is not None:
+        return busy
+    env = EnvSettings()
+    lookback_days = load_runtime_settings(env).delmir_lookback_days
+    job = job_manager.create_job(f"delmir_check:{lookback_days}d")
+    job_manager.schedule(
+        job.id,
+        run_delmir_transport_job(job.id, env, lookback_days_override=lookback_days, dry_run=True),
+    )
+    return RedirectResponse(url=f"/job/{job.id}", status_code=303)
+
+
 @app.get("/api/selfcheck/last")
 async def api_selfcheck_last() -> JSONResponse:
     return JSONResponse(load_last_result(EnvSettings()) or {})

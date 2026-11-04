@@ -735,6 +735,9 @@
         <form method="post" action="/run/selfcheck" data-job-form id="selfcheck-form" class="job-form">
           <button type="submit" data-job-btn>Проверить программу</button>
         </form>
+        <form method="post" action="/run/delmir-check" data-job-form id="delmir-check-form" class="job-form">
+          <button type="submit" data-job-btn>Проверить del-mir</button>
+        </form>
         <span id="selfcheck-last" class="muted"></span>
       </div>
     </div>
@@ -1008,6 +1011,8 @@
         сайт Biflorica, VPN для браузера и сайт del-mir через него. Только чтение — письма не помечаются прочитанными, Excel не запускается.</li>
       <li>Проверяет логику программы (перевод, словарь, «Переведено», почта, миксы) на файлах,
         которые сама создаёт в <code>data\selftest\run</code>. Рабочие файлы не трогает.</li>
+      <li>«Проверить del-mir» проходит весь путь «Транспорт трак» — VPN, вход, список и карточки
+        перевозок — и пишет в журнал, сколько AWB получено. <code>Auto_new.xls</code> не открывается и не меняется.</li>
       <li>Результат — список с зелёными ✓ и красными ✗; у красных написано, что сделать.
         Серый «–» — проверку нельзя выполнить на этой машине (например, не задан прокси).</li>
       <li>Удобно запускать после обновления программы и если что-то «вдруг перестало работать».</li>

@@ -686,7 +686,11 @@ async def run_delmir_transport_job(
     job_id: str,
     env: EnvSettings,
     lookback_days_override: int | None = None,
+    *,
+    dry_run: bool = False,
 ) -> None:
+    """dry_run — «Проверить del-mir»: тот же путь (VPN, вход, список, карточки),
+    но Auto_new.xls не открывается и не меняется."""
     yaml_cfg = env.yaml_config()
     cfg = yaml_cfg.delmir
     bcfg = yaml_cfg.balance_auto
@@ -704,6 +708,9 @@ async def run_delmir_transport_job(
     async def lg(msg: str) -> None:
         await job_log(job_id, msg)
 
+    if dry_run:
+        await lg(f"Проверка del-mir: без записи в Auto_new.xls, период {cfg.lookback_days} дн.")
+
     from cvetopt.core.runtime_settings import (
         effective_auto_new_workbook_raw,
         load_runtime_settings,
@@ -717,7 +724,7 @@ async def run_delmir_transport_job(
         yaml_balance=bcfg.workbook_path,
     )
     wb_path = resolve_auto_new_workbook(env, wb_raw)
-    if not wb_path.exists():
+    if not dry_run and not wb_path.exists():
         raise FileNotFoundError(wb_path)
 
     pw_cfg = merged_playwright(env, yaml_cfg)
@@ -776,6 +783,12 @@ async def run_delmir_transport_job(
                 await context.storage_state(path=str(sess_path))
             except Exception:
                 pass
+            if dry_run:
+                await lg(
+                    f"Проверка del-mir: вход и чтение прошли, получено {len(awb_to_cost)} AWB "
+                    f"за {cfg.lookback_days} дн. Auto_new.xls не менялся."
+                )
+                return
             if not awb_to_cost:
                 await lg("Нет данных с del-mir.com — выходим без изменений файла.")
                 return
