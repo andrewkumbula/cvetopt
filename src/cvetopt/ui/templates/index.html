@@ -413,18 +413,10 @@
           <button type="button" class="link-btn" data-mark>Отметить сделанным</button>
         </div>
       </li>
-      <li class="step" data-step="grid-fill" data-manual>
-        <h3>Заполнить сетку</h3>
-        <p>При приёмке сотрудник вносит количества по длинам в шаблон на сегодня.</p>
-        <p class="step-status"></p>
-        <div class="step-actions">
-          <button type="button" class="btn" data-mark>Сетка заполнена</button>
-        </div>
-      </li>
       <li class="step" data-step="grid-mixes" data-kind="mix_separation">
         <h3>Разобрать миксы</h3>
         <p>Списывает розы Mix из Biflorica по шаблону и добавляет позиции со средней ценой.</p>
-        <p class="need">Один раз на файл. В папке Biflorica лежит один свежий отчёт BiFlorica.</p>
+        <p class="need">Перед запуском: сетка на сегодня заполнена. Один раз на файл, в папке Biflorica лежит один свежий отчёт BiFlorica.</p>
         <p class="step-status"></p>
         <div class="step-actions">
           <form method="post" action="/run/mix-separation" data-job-form id="mix-separation-form">
