@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from cvetopt.core import vpn_tunnel
+from cvetopt.core.job_messages import humanize_ui_line
 from cvetopt.core.playwright_proxy import browser_proxy
 
 FAKE_SINGBOX = """#!/usr/bin/env python3
@@ -205,6 +206,30 @@ class BrowserProxyTests(unittest.TestCase):
     def test_not_needed_means_no_vpn_even_if_configured(self):
         proxy, _ = self._run(self._env(vpn_singbox="/some/dir"), needed=False)
         self.assertIsNone(proxy)
+
+
+class UiLinesTests(unittest.TestCase):
+    """В журнале на экране должно быть видно, что VPN включился и чем кончилась проверка."""
+
+    def test_vpn_and_check_lines_are_shown(self):
+        shown = [humanize_ui_line(line) for line in (
+            "Проверка del-mir: без записи в Auto_new.xls, период 10 дн.",
+            "VPN: запускаю sing-box…",
+            "VPN: sing-box запущен, порт 2080",
+            "VPN: туннель работает, внешний IP 64.188.71.9",
+            "Проверка del-mir: вход и чтение прошли, получено 0 AWB за 10 дн. Auto_new.xls не менялся.",
+        )]
+        self.assertEqual(shown, [
+            "Проверка del-mir: Auto_new.xls не меняется.",
+            "Включаю VPN…",
+            None,
+            "VPN работает (IP 64.188.71.9).",
+            "Проверка del-mir пройдена: получено AWB 0 за 10 дн. Auto_new.xls не менялся.",
+        ])
+
+    def test_vpn_error_is_shown(self):
+        line = humanize_ui_line("Ошибка: VPN: туннель не отвечает (timed out)")
+        self.assertIn("VPN", line)
 
 
 if __name__ == "__main__":
