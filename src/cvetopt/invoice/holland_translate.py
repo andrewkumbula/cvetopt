@@ -13,6 +13,8 @@ from cvetopt.invoice.description_dictionary import (
     SkipDescriptionRules,
     SKIP_DESCRIPTION_RULES_EMPTY,
     append_missing_descriptions,
+    is_cargo_summary_row,
+    row_values_in_order,
     is_holland_product_description,
     load_description_dictionary,
     looks_like_russian_description,
@@ -179,6 +181,8 @@ def _build_translation_plan(
         row = rows.get(row_n, {})
         text = _norm_cell(row.get(desc_col, ""))
         if not text or not is_holland_product_description(text, extra=skip_rules):
+            continue
+        if is_cargo_summary_row(row_values_in_order(row)):
             continue
         total += 1
         result, exact, any_hit = translate_description(dictionary, text)

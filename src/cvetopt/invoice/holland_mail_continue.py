@@ -15,6 +15,8 @@ from cvetopt.invoice.description_dictionary import (
     SkipDescriptionRules,
     SKIP_DESCRIPTION_RULES_EMPTY,
     append_missing_descriptions,
+    is_cargo_summary_row,
+    row_values_in_order,
     is_holland_product_description,
     load_description_dictionary,
     looks_like_russian_description,
@@ -211,6 +213,8 @@ def _plan_updates_xls(
         raw = _cell_str(sheet, row, layout.desc_col)
         if not _should_process_description(raw, skip_rules):
             continue
+        if is_cargo_summary_row(sheet.row_values(row)):
+            continue
         total += 1
         new_text, exact, any_hit = translate_description(dictionary, raw)
         if exact or any_hit:
@@ -308,6 +312,8 @@ def _plan_updates_xlsx(
         row = rows.get(row_n, {})
         raw = _norm(row.get(desc_col, ""))
         if not _should_process_description(raw, skip_rules):
+            continue
+        if is_cargo_summary_row(row_values_in_order(row)):
             continue
         total += 1
         new_text, exact, any_hit = translate_description(dictionary, raw)

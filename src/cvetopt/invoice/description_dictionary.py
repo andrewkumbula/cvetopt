@@ -73,6 +73,24 @@ _ORDER_CODE_RE = re.compile(
     re.IGNORECASE,
 )
 _ONLY_CODE_CHARS_RE = re.compile(r"^[\d\s./_\-]+$")
+# Сводка Cargo внизу инвойса Enigma (Paeonia, Orchids, Tulipa…): первая ячейка строки —
+# таможенный код 0603…/0604… из 8 цифр, у товаров там артикул из 5–6 цифр. (Тот же код
+# есть и у товаров, но правее — поэтому смотрим только первую заполненную ячейку.)
+_CUSTOMS_CODE_RE = re.compile(r"^'?06\d{6}'?$")
+
+
+def is_cargo_summary_row(values: Iterable[object]) -> bool:
+    """values — ячейки строки слева направо. Строка сводки Cargo — не сорт."""
+    first = next((v for v in values if str(v if v is not None else "").strip()), None)
+    if isinstance(first, (int, float)) and not isinstance(first, bool):
+        # Excel мог съесть ведущий ноль: 06031970 → 6031970.
+        return float(first).is_integer() and 6_010_000 <= first < 6_050_000
+    return bool(_CUSTOMS_CODE_RE.match(str(first or "").strip()))
+
+
+def row_values_in_order(row: dict[str, object]) -> list[object]:
+    """Ячейки строки xlsx {«A»: …, «AB»: …} слева направо."""
+    return [row[col] for col in sorted(row, key=lambda col: (len(col), col))]
 
 
 @dataclass(frozen=True)
