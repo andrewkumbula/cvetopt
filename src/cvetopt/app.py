@@ -4,20 +4,21 @@ import asyncio
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from loguru import logger
 
-from cvetopt.core import day_log
+from cvetopt.core import day_log, run_history
 from cvetopt.core.job_chains import run_balance_auto_and_delmir
 from cvetopt.core.job_manager import job_manager
 from cvetopt.core.job_messages import log_file_hint
 from cvetopt.core.models import JobStatus
-from cvetopt.core.logging_setup import configure_logging
+from cvetopt.core.logging_setup import active_log_dir, configure_logging
 from cvetopt.core.runtime_settings import (
     RuntimeSettings,
     load_runtime_settings,
@@ -66,6 +67,20 @@ async def _start_scheduler() -> None:
     from cvetopt.core.scheduler import start_scheduler
 
     asyncio.create_task(start_scheduler())
+    asyncio.create_task(_backfill_run_history())
+
+
+async def _backfill_run_history() -> None:
+    """Прогоны из data/logs → журнал дней, чтобы календарь не начинался с дня обновления."""
+    try:
+        added = await asyncio.to_thread(
+            run_history.backfill_from_logs, EnvSettings().project_root, active_log_dir()
+        )
+    except Exception:
+        logger.exception("Не удалось восстановить историю прогонов из журналов")
+        return
+    if added:
+        logger.info("История прогонов: восстановлено из журналов {}", added)
 
 
 def _git_version() -> dict[str, str]:
@@ -146,7 +161,42 @@ async def api_today() -> JSONResponse:
         # Страница прогона живёт в памяти: после перезапуска ссылку не показываем.
         entry["has_page"] = job_manager.get(entry["id"]) is not None
         runs.setdefault(entry["kind"], []).append(entry)
-    return JSONResponse({"runs": runs, "marks": day_log.load_marks(root, today)})
+    return JSONResponse({
+        "runs": runs,
+        "marks": day_log.load_marks(root, today),
+        "last": run_history.last_runs(root, today),
+    })
+
+
+_HISTORY_WEEKS = 5
+
+
+@app.get("/api/history")
+async def api_history() -> JSONResponse:
+    """Вкладка «Журнал»: прогоны по дням за 5 недель (с понедельника) и сводка автозапусков."""
+    env = EnvSettings()
+    root = env.project_root
+    now = datetime.now()
+    today = now.date()
+    first = today - timedelta(days=today.weekday() + 7 * (_HISTORY_WEEKS - 1))
+    days = run_history.history(root, first, today)
+    for job in job_manager.list_recent(500):
+        entry = day_log.run_entry(job)
+        if entry["started"][:10] < first.isoformat():
+            continue
+        day_runs = days.setdefault(entry["started"][:10], [])
+        day_runs[:] = [r for r in day_runs if r["id"] != job.id] + [entry]
+    for day_runs in days.values():
+        day_runs.sort(key=lambda r: r["started"])
+        for entry in day_runs:
+            entry["has_page"] = job_manager.get(entry["id"]) is not None
+    return JSONResponse({
+        "today": today.isoformat(),
+        "first": first.isoformat(),
+        "days": days,
+        "labels": run_history.KIND_LABELS,
+        "autoruns": run_history.autorun_overview(root, env.yaml_config().schedule, now, first),
+    })
 
 
 @app.post("/api/steps/{step_id}")

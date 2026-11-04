@@ -56,7 +56,7 @@ class DayLogTests(unittest.TestCase):
     def test_old_day_files_are_pruned(self):
         folder = self.root / "data" / "state" / "steps"
         folder.mkdir(parents=True)
-        old = folder / f"{(date.today() - timedelta(days=30)).isoformat()}.json"
+        old = folder / f"{(date.today() - timedelta(days=day_log._KEEP_DAYS + 1)).isoformat()}.json"
         old.write_text(json.dumps({}), encoding="utf-8")
         day_log.set_mark(self.root, "grid-fill", day_log.STEP_DONE)
         self.assertFalse(old.exists())

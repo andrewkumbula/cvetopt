@@ -5,7 +5,8 @@
   data/state/steps/ГГГГ-ММ-ДД.json  — отметки шагов: «сделано вручную» или «отметка снята».
 
 Отметка «снята» в момент T значит: прогоны, начатые до T, шаг больше не закрывают.
-Файлы старше _KEEP_DAYS удаляются при записи.
+Файлы старше _KEEP_DAYS удаляются при записи. Прогоны до появления этого журнала
+восстанавливаются из data/logs (см. run_history).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from loguru import logger
 
 from cvetopt.core.models import JobState, JobStatus
 
-_KEEP_DAYS = 14
+_KEEP_DAYS = 90  # календарь на вкладке «Журнал»
 _STEP_ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 STEP_DONE = "done"
 STEP_UNDONE = "undone"
@@ -102,8 +103,33 @@ def record_finished_run(root: Path, job: JobState) -> None:
         logger.warning("Не удалось записать прогон в {}: {}", path, e)
 
 
+def merge_runs(root: Path, day: date, entries: list[dict]) -> int:
+    """Дописывает прогоны, которых в журнале дня ещё нет (по id). Возвращает, сколько добавлено."""
+    if day < date.today() - timedelta(days=_KEEP_DAYS):
+        return 0
+    path = _day_file(root, "runs", day)
+    with _lock:
+        runs = _read(path, [])
+        known = {r.get("id") for r in runs}
+        fresh = [e for e in entries if e["id"] not in known]
+        if fresh:
+            _write(path, sorted(runs + fresh, key=lambda r: r.get("started", "")))
+    return len(fresh)
+
+
 def load_runs(root: Path, day: date) -> list[dict]:
     return _read(_day_file(root, "runs", day), [])
+
+
+def run_days(root: Path) -> list[date]:
+    """Дни, за которые есть журнал прогонов, по возрастанию."""
+    days = []
+    for path in (root / "data" / "state" / "runs").glob("*.json"):
+        try:
+            days.append(date.fromisoformat(path.stem))
+        except ValueError:
+            continue
+    return sorted(days)
 
 
 def load_marks(root: Path, day: date) -> dict[str, dict]:
