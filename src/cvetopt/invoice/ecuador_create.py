@@ -5,6 +5,7 @@ import re
 import shutil
 import sys
 import time
+import unicodedata
 import zipfile
 from collections.abc import Callable
 from datetime import datetime
@@ -859,6 +860,16 @@ def _newest_ecuador_xlsm(output_dir: Path) -> Path | None:
     return items[0] if items else None
 
 
+def _is_same_export(path: Path, keep: Path) -> bool:
+    """Новый файл узнаём по имени: на сервере одна папка бывает видна по двум путям (на C: и на D:)."""
+    if unicodedata.normalize("NFC", path.name).casefold() == unicodedata.normalize("NFC", keep.name).casefold():
+        return True
+    try:
+        return path.samefile(keep)
+    except OSError:
+        return False
+
+
 def archive_stale_ecuador_exports(
     output_dir: Path,
     archive_dir: Path,
@@ -886,7 +897,7 @@ def archive_stale_ecuador_exports(
         except ValueError:
             candidates.append(path)
 
-    to_move = [path for path in candidates if path.resolve() != keep]
+    to_move = [path for path in candidates if not _is_same_export(path, keep)]
     if not to_move:
         _lg("Эквадор: старых файлов для архива нет")
         return None, [], []
@@ -916,7 +927,7 @@ def archive_stale_ecuador_exports(
             warnings.append(f"{src.name}: не удалось архивировать — {e}")
 
     if moved:
-        _lg(f"Эквадор: в архив {len(moved)} → {archive_dir}")
+        _lg(f"Эквадор: в архив {len(moved)} → {archive_dir}: {', '.join(moved)}")
     for warn in warnings:
         _lg(f"Эквадор (архив): {warn}")
     return (archive_dir if moved else None), moved, warnings
