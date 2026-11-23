@@ -13,12 +13,11 @@ from pathlib import Path
 
 from dateutil import parser as date_parser
 from loguru import logger
-from playwright.async_api import Browser, Download, Page, async_playwright
+from playwright.async_api import Download, Page, async_playwright
 
 from cvetopt.core.job_manager import job_log, job_manager, job_step, raise_if_cancelled
 from cvetopt.core.models import Order
 from cvetopt.core.registry import DownloadRegistry
-from cvetopt.core.playwright_proxy import browser_proxy
 from cvetopt.core.runtime_settings import (
     archive_biflorica_download_dir,
     biflorica_download_filename,
@@ -37,6 +36,7 @@ from cvetopt.core.settings import (
     _resolve_selection,
     merged_playwright,
 )
+from cvetopt.scrapers.biflorica_route import open_biflorica
 
 
 LogFn = Callable[[str], Awaitable[None]]
@@ -489,32 +489,29 @@ async def run_biflorica_job(
     async def lg(msg: str) -> None:
         await job_log(job_id, msg)
 
-    async with browser_proxy(env, lg, needed=portal.use_proxy) as proxy, async_playwright() as p:
-        launch_kwargs: dict = {
-            "headless": pw_cfg.headless,
-            "slow_mo": pw_cfg.slow_mo_ms or None,
-        }
-        if proxy:
-            launch_kwargs["proxy"] = proxy
-            await lg(f"Playwright proxy: {proxy['server']}")
-        elif not portal.use_proxy:
-            await lg("Biflorica: открываю напрямую, без VPN")
-        browser: Browser = await p.chromium.launch(**launch_kwargs)
-        context_opts: dict = {
-            "accept_downloads": True,
-            "viewport": {"width": 1400, "height": 900},
-        }
-        if session_path.exists():
-            context_opts["storage_state"] = str(session_path)
-            await lg("Загружена сохранённая сессия")
-        context = await browser.new_context(**context_opts)
-        context.set_default_navigation_timeout(pw_cfg.navigation_timeout_ms)
-        page = await context.new_page()
+    launch_kwargs: dict = {
+        "headless": pw_cfg.headless,
+        "slow_mo": pw_cfg.slow_mo_ms or None,
+    }
+    context_opts: dict = {
+        "accept_downloads": True,
+        "viewport": {"width": 1400, "height": 900},
+    }
+    if session_path.exists():
+        context_opts["storage_state"] = str(session_path)
+        await lg("Загружена сохранённая сессия")
 
+    async with async_playwright() as p, open_biflorica(
+        env,
+        portal,
+        p,
+        launch_kwargs=launch_kwargs,
+        context_opts=context_opts,
+        navigation_timeout_ms=pw_cfg.navigation_timeout_ms,
+        log=lg,
+    ) as (page, portal):
+        context = page.context
         try:
-            await lg(f"Открываю {portal.login_url}")
-            await page.goto(portal.login_url, wait_until="domcontentloaded")
-
             try:
                 await page.locator(portal.selectors.password).first.wait_for(
                     state="visible",
@@ -747,7 +744,6 @@ async def run_biflorica_job(
             await lg("Готово.")
         finally:
             await context.close()
-            await browser.close()
 
 
 async def _archive_biflorica_reports(

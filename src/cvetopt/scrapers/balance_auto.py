@@ -3,13 +3,13 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from datetime import date
+from urllib.parse import urlparse
 
 from dateutil import parser as date_parser
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Page, async_playwright
 
 from cvetopt.auto_new_xls import FlightFillRow, apply_balance_flights
 from cvetopt.core.job_manager import job_log, job_manager
-from cvetopt.core.playwright_proxy import browser_proxy
 from cvetopt.core.settings import (
     AppYamlConfig,
     BalanceAutoConfig,
@@ -18,6 +18,7 @@ from cvetopt.core.settings import (
     _resolve_selection,
     merged_playwright,
 )
+from cvetopt.scrapers.biflorica_route import open_biflorica, with_host
 
 LogFn = Callable[[str], Awaitable[None]]
 
@@ -309,45 +310,48 @@ async def run_balance_auto_job(job_id: str, env: EnvSettings) -> None:
     session_path = env.project_root / "data" / "sessions" / "biflorica.json"
     today = date.today()
 
-    async with browser_proxy(env, lg, needed=portal.use_proxy) as proxy, async_playwright() as p:
-        launch_kwargs: dict = {
-            "headless": pw_cfg.headless,
-            "slow_mo": pw_cfg.slow_mo_ms or None,
-        }
-        if proxy:
-            launch_kwargs["proxy"] = proxy
-            await lg(f"Playwright proxy: {proxy['server']}")
-        elif not portal.use_proxy:
-            await lg("Biflorica: открываю напрямую, без VPN")
-        browser: Browser = await p.chromium.launch(**launch_kwargs)
-        context_opts: dict = {
-            "accept_downloads": True,
-            "viewport": {"width": 1400, "height": 900},
-        }
-        if session_path.exists():
-            context_opts["storage_state"] = str(session_path)
-            await lg("Загружена сохранённая сессия Biflorica")
-        context = await browser.new_context(**context_opts)
-        context.set_default_navigation_timeout(pw_cfg.navigation_timeout_ms)
-        page = await context.new_page()
+    launch_kwargs: dict = {
+        "headless": pw_cfg.headless,
+        "slow_mo": pw_cfg.slow_mo_ms or None,
+    }
+    context_opts: dict = {
+        "accept_downloads": True,
+        "viewport": {"width": 1400, "height": 900},
+    }
+    if session_path.exists():
+        context_opts["storage_state"] = str(session_path)
+        await lg("Загружена сохранённая сессия Biflorica")
 
-        try:
-            flights = await _login_and_scrape(
-                page, portal, bcfg, yaml_cfg, env, today, lg,
-            )
-            cleared, we, wc, overflow, xls_notes = apply_balance_flights(wb_path, bcfg, flights)
-            for line in xls_notes:
-                await lg(line)
-            await lg(
-                f"Excel: очищено ячеек (без формул): {cleared}; "
-                f"записано Эквадор: {we}, Колумбия: {wc}; не влезло строк: {overflow}",
-            )
-            await job_manager.add_downloaded(job_id, str(wb_path))
-            await lg(f"Файл сохранён: {wb_path}")
-            await lg("Готово.")
-        finally:
-            await context.close()
-            await browser.close()
+    async with async_playwright() as p, open_biflorica(
+        env,
+        portal,
+        p,
+        launch_kwargs=launch_kwargs,
+        context_opts=context_opts,
+        navigation_timeout_ms=pw_cfg.navigation_timeout_ms,
+        log=lg,
+    ) as (page, route_portal):
+        flights = await _login_and_scrape(
+            page,
+            route_portal,
+            bcfg.model_copy(
+                update={"balance_url": with_host(bcfg.balance_url, urlparse(route_portal.login_url).netloc)}
+            ),
+            yaml_cfg,
+            env,
+            today,
+            lg,
+        )
+        cleared, we, wc, overflow, xls_notes = apply_balance_flights(wb_path, bcfg, flights)
+        for line in xls_notes:
+            await lg(line)
+        await lg(
+            f"Excel: очищено ячеек (без формул): {cleared}; "
+            f"записано Эквадор: {we}, Колумбия: {wc}; не влезло строк: {overflow}",
+        )
+        await job_manager.add_downloaded(job_id, str(wb_path))
+        await lg(f"Файл сохранён: {wb_path}")
+        await lg("Готово.")
 
 
 async def _login_and_scrape(
@@ -362,9 +366,7 @@ async def _login_and_scrape(
     email = env.biflorica_email
     password = env.biflorica_password
 
-    await log(f"Открываю {portal.login_url}")
-    await page.goto(portal.login_url, wait_until="domcontentloaded")
-
+    # Страница входа уже открыта в open_biflorica.
     try:
         await page.locator(portal.selectors.password).first.wait_for(
             state="visible",

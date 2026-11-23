@@ -102,6 +102,10 @@ _HIDE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 # Порядок важен: срабатывает первое совпадение.
 _REWRITE_RULES: tuple[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]], ...] = (
     # --- вход на сайты ---
+    (_rx(r"^biflorica: открываю (\S+) (напрямую|через vpn)"), "Biflorica: захожу на {0} {1}…"),
+    (_rx(r"^biflorica: (\S+ (?:напрямую|через vpn)) не отвечает"),
+     "Biflorica: {0} не отвечает — пробую другой путь."),
+    (_rx(r"^(biflorica: vpn .*)$"), "{0}"),
     (_rx(r"^открываю\s+https?://[^\s]*biflorica"), "Открываю сайт Biflorica…"),
     (_rx(r"^открываю\s+https?://[^\s]*del-mir"), "Открываю сайт del-mir…"),
     (_rx(r"^выполняю вход"), "Вхожу в аккаунт…"),
