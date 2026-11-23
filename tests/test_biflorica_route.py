@@ -1,4 +1,4 @@
-"""Biflorica: .ru не отвечает → .com напрямую → .com через VPN (настоящий браузер, сайты локальные).
+"""Biflorica: .ru не отвечает → .com через VPN → .ru через VPN (настоящий браузер, сайты локальные).
 
 Адреса ec.term.biflorica.ru/.com направляем в браузере на локальные порты: «живой» порт
 отдаёт страницу входа, «мёртвый» закрыт. «VPN» — локальный прокси, который отвечает на всё.
@@ -50,7 +50,11 @@ def _dead_port():
 class RoutesOrderTests(unittest.TestCase):
     def test_order(self):
         portal = BifloricaPortalConfig(login_url=f"https://{RU}/marketPlaceNew/balance")
-        self.assertEqual(routes(portal), [(RU, False), (COM, False), (COM, True), (RU, True)])
+        self.assertEqual(routes(portal), [(RU, False), (COM, True), (RU, True)])
+
+    def test_order_when_vpn_is_on(self):
+        portal = BifloricaPortalConfig(login_url=f"https://{RU}/x", use_proxy=True)
+        self.assertEqual(routes(portal), [(RU, True), (COM, True), (RU, False)])
 
 
 class OpenBifloricaTests(unittest.TestCase):
@@ -102,16 +106,17 @@ class OpenBifloricaTests(unittest.TestCase):
         self.assertEqual(portal.orders_url, f"http://{RU}/marketPlaceNew/default/orders")
         self.assertNotIn("не отвечает", "\n".join(lines))
 
-    def test_ru_dead_goes_to_com(self):
-        content, portal, lines = self.run_open({COM}, vpn=False)
-        self.assertIn(COM, content)
+    def test_ru_dead_goes_to_com_through_vpn(self):
+        content, portal, lines = self.run_open(set(), vpn=True)
+        self.assertIn(COM, content)  # .com — только через VPN
         self.assertEqual(portal.orders_url, f"http://{COM}/marketPlaceNew/default/orders")
         self.assertIn(f"Biflorica: {RU} напрямую не отвечает", lines)
-
-    def test_both_dead_goes_through_vpn(self):
-        content, portal, lines = self.run_open(set(), vpn=True)
-        self.assertIn(COM, content)  # .com через VPN — третий по очереди
         self.assertIn(f"Biflorica: открываю {COM} через VPN", lines)
+        self.assertNotIn(f"Biflorica: открываю {COM} напрямую", lines)
+
+    def test_com_alive_but_no_vpn_is_not_used_directly(self):
+        with self.assertRaisesRegex(Exception, "ERR_"):
+            self.run_open({COM}, vpn=False)
 
     def test_nothing_works_raises_site_error(self):
         with self.assertRaisesRegex(Exception, "ERR_"):

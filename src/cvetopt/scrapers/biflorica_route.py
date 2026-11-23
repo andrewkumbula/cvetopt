@@ -1,5 +1,5 @@
 """
-Как открыть Biflorica: .ru напрямую → .com напрямую → .com через VPN → .ru через VPN.
+Как открыть Biflorica: .ru напрямую → .com через VPN → .ru через VPN (.com напрямую не пробуем).
 
 Переключаемся только если не открылась первая страница (до входа), поэтому повторный
 заход ничего не скачивает дважды. 23.11.2026 ec.term.biflorica.ru не отвечал, а .com работал.
@@ -55,14 +55,16 @@ def mirror_host(host: str) -> str | None:
 
 
 def routes(portal: BifloricaPortalConfig) -> list[tuple[str, bool]]:
-    """(хост, через VPN) в порядке попыток."""
+    """(хост, через VPN) в порядке попыток. .com — только через VPN."""
     host = urlparse(portal.login_url).hostname or ""
     hosts = [host] + ([m] if (m := mirror_host(host)) else [])
     vpn_order = [True, False] if portal.use_proxy else [False, True]
     result = []
     for via_vpn in vpn_order:
-        for h in hosts if not via_vpn else list(reversed(hosts)):
-            result.append((h, via_vpn))
+        for h in hosts:
+            route = (h, via_vpn or h.endswith(".com"))
+            if route not in result:
+                result.append(route)
     return result
 
 
